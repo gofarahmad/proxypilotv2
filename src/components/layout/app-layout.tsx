@@ -19,7 +19,7 @@ export function AppLayout({ children }: PropsWithChildren) {
               <path d="M12 6v1m0 1m0 1m0 1m0 1m0 1"/>
               <path d="M8.793 8.793l.707.707m4.707 4.707l.707.707m0-5.414l-.707.707m-4.707 4.707l-.707.707"/>
             </svg>
-            <h1 className="text-2xl font-semibold text-foreground group-data-[collapsible=icon]:hidden">Proxy Pilot</h1>
+            <h1 className="text-2xl font-semibold text-sidebar-foreground group-data-[collapsible=icon]:hidden">Proxy Pilot</h1>
           </div>
         </SidebarHeader>
         <SidebarContent className="p-2">
