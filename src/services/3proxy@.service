@@ -1,0 +1,22 @@
+
+[Unit]
+Description=3proxy Service for Interface %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The user 'nobody' is a good choice for security.
+# Ensure this user has read access to the config file and can bind to the specified port.
+User=nobody
+Group=nobody
+# The ExecStart command now points to the dynamically generated config file.
+ExecStart=/usr/bin/3proxy /etc/3proxy/conf/%i.cfg
+ExecStop=/bin/kill $MAINPID
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+    
