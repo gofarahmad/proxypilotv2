@@ -100,7 +100,7 @@ sudo chown -R $(whoami):$(whoami) /etc/3proxy
 
 ### Langkah 4: Membuat Layanan 3proxy Dinamis (`systemd`)
 
-Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3proxy untuk setiap modem (misalnya, `3proxy@ppp0.service`).
+Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3proxy untuk setiap modem (misalnya, `3proxy@ppp0.service`). **Langkah ini sangat penting dan sering menjadi sumber error jika tidak dilakukan dengan benar.**
 
 1.  **Buat file layanan baru:**
     ```bash
@@ -128,12 +128,14 @@ Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3pr
 
 4.  **Reload dan Verifikasi Layanan (Sangat Penting):**
     ```bash
-    # Reload daemon systemd untuk mengenali layanan baru
+    # Reload daemon systemd untuk mengenali layanan baru. 
+    # Perintah ini HARUS dijalankan setiap kali Anda mengubah file .service.
     sudo systemctl daemon-reload
 
     # Verifikasi bahwa template layanan sudah dikenali. 
-    # Perintah ini SEHARUSNYA menampilkan "disabled". Ini NORMAL.
-    # Jika Anda melihat error "Unit 3proxy@.service not found", ada masalah dengan nama file atau lokasinya.
+    # Perintah ini SEHARUSNYA menampilkan "disabled". Ini NORMAL dan BENAR.
+    # Jika Anda melihat error "Unit 3proxy@.service not found", 
+    # artinya ada masalah dengan nama file atau lokasinya. Periksa kembali Langkah 4.1.
     systemctl status 3proxy@.service
     ```
 Layanan ini **tidak akan dimulai secara otomatis**. Aplikasi Proxy Pilot akan memulai dan menghentikannya sesuai kebutuhan melalui UI. Langkah verifikasi di atas sangat penting untuk mencegah error "Unit not found" di dalam aplikasi.
@@ -310,5 +312,3 @@ Fitur ini memungkinkan Anda mengekspos proxy lokal Anda ke internet menggunakan 
     *   Pilih tunnel tersebut, pilih proxy lokal yang ingin Anda hubungkan, dan klik "Create Tunnel".
 
 Sistem sekarang akan menghubungkan proxy lokal Anda ke domain kustom Anda melalui Cloudflare, tanpa Anda perlu memasukkan API key apa pun ke dalam aplikasi.
-
-    

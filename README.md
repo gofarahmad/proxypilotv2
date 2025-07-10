@@ -32,6 +32,7 @@ Aplikasi ini bergantung pada beberapa perangkat lunak sistem kunci untuk berfung
 - **`ModemManager` & `usb-modeswitch` (Opsional tapi Direkomendasikan):** Layanan sistem Linux yang dibutuhkan untuk fitur-fitur lanjutan seperti rotasi IP, kirim SMS, dan USSD. Deteksi modem dasar akan tetap berfungsi tanpanya.
 - **`nginx` (Opsional tapi Direkomendasikan):** Diperlukan jika Anda ingin mengakses aplikasi tanpa nomor port.
 - **`cloudflared` (Opsional):** Diperlukan jika Anda ingin menggunakan fitur Cloudflare Tunnel.
+- **`curl`:** Diperlukan untuk mengambil IP publik.
 
 ### 2. Pengetahuan & Kemampuan
 
@@ -60,7 +61,8 @@ sudo apt update && sudo apt upgrade -y
 # git: Untuk mengkloning repositori
 # nginx: Untuk reverse proxy (opsional)
 # modemmanager & usb-modeswitch: Opsional untuk fitur lanjutan tapi sangat direkomendasikan
-sudo apt install -y 3proxy python3 python3-pip git nginx modemmanager usb-modeswitch
+# curl: Diperlukan untuk mengambil IP publik
+sudo apt install -y 3proxy python3 python3-pip git nginx modemmanager usb-modeswitch curl
 ```
 
 ### Langkah 2: Instalasi Node.js
@@ -100,7 +102,7 @@ sudo chown -R $(whoami):$(whoami) /etc/3proxy
 
 ### Langkah 4: Membuat Layanan 3proxy Dinamis (`systemd`)
 
-Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3proxy untuk setiap modem (misalnya, `3proxy@ppp0.service`).
+Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3proxy untuk setiap modem (misalnya, `3proxy@ppp0.service`). **Langkah ini sangat penting dan sering menjadi sumber error jika tidak dilakukan dengan benar.**
 
 1.  **Buat file layanan baru:**
     ```bash
@@ -126,11 +128,19 @@ Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3pr
 
 3.  Simpan file dan keluar dari editor (`Ctrl+X`, lalu `Y`, lalu `Enter`).
 
-4.  **Reload daemon systemd** untuk mengenali layanan baru:
+4.  **Reload dan Verifikasi Layanan (Sangat Penting):**
     ```bash
+    # Reload daemon systemd untuk mengenali layanan baru. 
+    # Perintah ini HARUS dijalankan setiap kali Anda mengubah file .service.
     sudo systemctl daemon-reload
+
+    # Verifikasi bahwa template layanan sudah dikenali. 
+    # Perintah ini SEHARUSNYA menampilkan "disabled". Ini NORMAL dan BENAR.
+    # Jika Anda melihat error "Unit 3proxy@.service not found", 
+    # artinya ada masalah dengan nama file atau lokasinya. Periksa kembali Langkah 4.1.
+    systemctl status 3proxy@.service
     ```
-Layanan ini **tidak akan dimulai secara otomatis**. Aplikasi Proxy Pilot akan memulai dan menghentikannya sesuai kebutuhan melalui UI.
+Layanan ini **tidak akan dimulai secara otomatis**. Aplikasi Proxy Pilot akan memulai dan menghentikannya sesuai kebutuhan melalui UI. Langkah verifikasi di atas sangat penting untuk mencegah error "Unit not found" di dalam aplikasi.
 
 ### Langkah 5: Mengkloning dan Menyiapkan Aplikasi
 

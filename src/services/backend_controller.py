@@ -509,15 +509,18 @@ def get_vnstat_interfaces():
     if not is_command_available("vnstat"):
         raise Exception("`vnstat` is not installed.")
     try:
+        # Get all interfaces vnstat knows about
         vnstat_interfaces_output = run_command(['vnstat', '--iflist'])
-        vnstat_interfaces = set(vnstat_interfaces_output.split())
-        
+        # Split the output and ignore the header line (e.g., "Available interfaces: ...")
+        vnstat_interfaces = set(vnstat_interfaces_output.splitlines()[1:])
+
+        # Get interfaces identified as modems
         modem_interfaces = set(get_modem_interface_names())
         
-        # Find the intersection of the two sets
-        relevant_interfaces = list(vnstat_interfaces.intersection(modem_interfaces))
+        # Find the intersection of the two sets to get only relevant interfaces
+        relevant_interfaces = sorted(list(vnstat_interfaces.intersection(modem_interfaces)))
         
-        log_message("DEBUG", f"Found {len(relevant_interfaces)} relevant interfaces for vnstat.")
+        log_message("DEBUG", f"Found {len(relevant_interfaces)} relevant interfaces for vnstat: {relevant_interfaces}")
         return {"success": True, "data": relevant_interfaces}
     except Exception as e:
         log_message("ERROR", f"Failed to get filtered vnstat interface list: {e}")
