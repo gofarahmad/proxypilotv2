@@ -6,10 +6,9 @@ import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { getAllModemStatuses } from '@/services/network-service';
-import { getAllProxyConfigs } from '@/services/proxy-service';
+import { getAllModemStatuses, ModemStatus } from '@/services/network-service';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ClipboardCopy, KeyRound, ListChecks, Info, Copy, NetworkIcon, Binary, User, Lock, AlertTriangle } from 'lucide-react';
+import { ClipboardCopy, KeyRound, ListChecks, Info, Copy, NetworkIcon, Binary, User, Lock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
   Table,
@@ -31,7 +30,7 @@ interface FormattedProxy {
   name: string;
   interfaceName: string;
   proxyString: string;
-  type: '3proxy';
+  type: 'Proxy';
   ipAddress: string;
   port: number;
   username?: string;
@@ -47,22 +46,13 @@ export default function ProxyListPage() {
     setIsLoading(true);
     try {
       const modemStatuses = await getAllModemStatuses();
-      const proxyConfigs = await getAllProxyConfigs();
 
-      const activeModems = new Map(modemStatuses
-        .filter(m => m.status === 'connected' && m.proxyStatus === 'running')
-        .map(m => [m.interfaceName, m])
-      );
-
-      const proxies: FormattedProxy[] = [];
-
-      for (const interfaceName in proxyConfigs) {
-        const config = proxyConfigs[interfaceName];
-        const activeModem = activeModems.get(interfaceName);
-
-        if (activeModem && config && config.bindIp && config.port) {
-          const ip = config.bindIp;
-          const port = config.port;
+      const activeProxies = modemStatuses
+        .filter(m => m.status === 'connected' && m.proxyStatus === 'running' && m.proxyConfig?.bindIp && m.proxyConfig?.port)
+        .map(modem => {
+          const config = modem.proxyConfig!;
+          const ip = config.bindIp!;
+          const port = config.port!;
           const username = config.username;
           const password = config.password;
           
@@ -71,21 +61,20 @@ export default function ProxyListPage() {
             proxyString += `:${username}:${password}`;
           }
 
-          proxies.push({
-            id: activeModem.id,
-            name: config.customName || activeModem.name,
-            interfaceName: interfaceName,
+          return {
+            id: modem.id,
+            name: config.customName || modem.name,
+            interfaceName: modem.interfaceName,
             proxyString: proxyString,
-            type: '3proxy',
+            type: 'Proxy',
             ipAddress: ip,
             port: port,
             username: username,
             password: password,
-          });
-        }
-      }
+          } as FormattedProxy;
+        });
 
-      setFormattedProxies(proxies);
+      setFormattedProxies(activeProxies);
 
     } catch (error) {
       console.error("Failed to fetch or format proxies:", error);
@@ -97,6 +86,8 @@ export default function ProxyListPage() {
 
   useEffect(() => {
     fetchAndFormatProxies();
+    const interval = setInterval(fetchAndFormatProxies, 30000); // Refresh every 30 seconds
+    return () => clearInterval(interval);
   }, [fetchAndFormatProxies]);
 
   const handleCopyToClipboard = (text: string | number | undefined, label: string, proxyName: string) => {

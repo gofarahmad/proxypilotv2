@@ -147,7 +147,9 @@ def write_3proxy_config_file(interface_name, ip_address):
 def is_command_available(command):
     return shutil.which(command) is not None
 
-def get_proxy_status(interface_name):
+def get_proxy_status(interface_name, modem_status):
+    if modem_status != 'connected':
+        return 'stopped'
     try:
         run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], use_sudo=True)
         return 'running'
@@ -210,16 +212,17 @@ def get_modems_from_ip_addr():
                         break
                 
                 is_connected = iface.get('operstate') == 'UP' and ip_address
+                status = 'connected' if is_connected else 'disconnected'
                 public_ip = get_public_ip(ifname) if is_connected else None
                 
                 modems[ifname] = {
                     "id": iface.get('address', ifname),
                     "name": f"Modem ({ifname})",
                     "interfaceName": ifname,
-                    "status": 'connected' if is_connected else 'disconnected',
+                    "status": status,
                     "ipAddress": ip_address,
                     "publicIpAddress": public_ip,
-                    "proxyStatus": get_proxy_status(ifname),
+                    "proxyStatus": get_proxy_status(ifname, status),
                     "source": "ip_addr",
                 }
     except Exception as e:
@@ -276,10 +279,13 @@ def get_all_modem_statuses():
                 proxy_configs[interface_name] = modem_proxy_config
                 configs_changed = True
 
-            if proxy_configs.get(interface_name, {}).get('customName'):
-                 modem['name'] = proxy_configs[interface_name]['customName']
+            # Always update the modem object with its config for the frontend
+            modem['proxyConfig'] = proxy_configs.get(interface_name, {})
+
+            if modem['proxyConfig'].get('customName'):
+                 modem['name'] = modem['proxyConfig']['customName']
             
-            current_bind_ip = proxy_configs.get(interface_name, {}).get('bindIp')
+            current_bind_ip = modem['proxyConfig'].get('bindIp')
             if modem['ipAddress'] and current_bind_ip != modem['ipAddress']:
                  proxy_configs.setdefault(interface_name, {})['bindIp'] = modem['ipAddress']
                  configs_changed = True
@@ -621,7 +627,7 @@ def update_proxy_config(interface_name, updates_json):
             all_configs[interface_name][key] = value
         write_state_file(PROXY_CONFIGS_FILE, all_configs)
         log_message("INFO", f"Updated config for {interface_name} with: {updates}")
-        if is_credential_update and get_proxy_status(interface_name) == 'running':
+        if is_credential_update and get_proxy_status(interface_name, 'connected') == 'running':
             log_message("INFO", f"Credentials changed for {interface_name}. Restarting proxy.")
             proxy_action('restart', interface_name)
         return {"success": True, "data": all_configs[interface_name]}
@@ -677,4 +683,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
