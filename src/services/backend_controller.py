@@ -41,8 +41,14 @@ def log_message(level, message):
 # --- Helper Functions ---
 def run_command(command_list, use_sudo=False, timeout=15):
     try:
+        # For systemctl commands, sudo might be required depending on user setup
+        if command_list[0] == 'systemctl':
+            use_sudo = True
+        
+        cmd_to_run = ['sudo'] + command_list if use_sudo else command_list
+        
         result = subprocess.run(
-            command_list, check=True, capture_output=True, text=True, timeout=timeout
+            cmd_to_run, check=True, capture_output=True, text=True, timeout=timeout
         )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
@@ -52,6 +58,7 @@ def run_command(command_list, use_sudo=False, timeout=15):
         error_output = e.stderr.strip() if e.stderr else "No error output."
         log_message("ERROR", f"Command failed: {' '.join(command_list)}. Error: {error_output}")
         if "couldn't find bearer" in error_output.lower():
+            # This is a special case for rotation, not a fatal error
             return json.dumps({"bearer_error": True, "message": error_output})
         if "unable to read database" in error_output.lower():
              return json.dumps({"vnstat_error": "not_ready", "message": error_output})
@@ -105,7 +112,7 @@ def generate_3proxy_config_content(config, ip_address):
     auth_lines = ""
     if is_authenticated:
         auth_lines = f"users {config['username']}:CL:{config['password']}\nallow {config['username']}"
-    # Use the local IP for both internal and external binding for simplicity and correctness
+    # Bind to the modem's local IP, but allow outbound connections via that IP.
     return f"""daemon
 nserver 8.8.8.8
 nserver 8.8.4.4
@@ -142,25 +149,22 @@ def is_command_available(command):
 
 def get_proxy_status(interface_name):
     try:
-        run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"])
+        run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], use_sudo=True)
         return 'running'
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        # This is the expected state for a stopped service, so it's not an error.
         return 'stopped'
     except Exception as e:
         log_message("WARN", f"Could not determine proxy status for {interface_name}: {e}")
         return 'error'
         
 def get_public_ip(interface_name):
-    """Fetches the public IP address via a specific interface."""
     if not is_command_available("curl"):
         log_message("WARN", f"curl is not installed. Cannot fetch public IP for {interface_name}.")
         return None
     try:
-        # Using api.ipify.org as it's simple and reliable
         return run_command(['curl', '--interface', interface_name, '--connect-timeout', '5', 'https://api.ipify.org'], timeout=10)
-    except Exception as e:
-        log_message("WARN", f"Could not fetch public IP for {interface_name}. It may not be fully online. Error: {e}")
+    except Exception:
+        log_message("WARN", f"Could not fetch public IP for {interface_name}. It may not be fully online.")
         return None
 
 def get_modem_interface_names():
@@ -238,14 +242,12 @@ def enhance_with_mmcli_data(modems_dict):
                 interface_name = modem_info.get('generic', {}).get('primary-port')
                 if interface_name and interface_name in modems_dict:
                     device_id = modem_info.get('generic', {}).get('device-identifier', interface_name)
-                    modem_model = modem_info.get('3gpp', {}).get('imei', f'Modem ({device_id[-4:]})')
                     
-                    # More descriptive name
                     vendor = modem_info.get('device-properties', {}).get('device.vendor.name', '')
-                    model = modem_info.get('device-properties', {}).get('device.model', modem_model)
+                    model = modem_info.get('device-properties', {}).get('device.model', f'Modem ({device_id[-6:]})')
 
                     modems_dict[interface_name]['id'] = device_id
-                    modems_dict[interface_name]['name'] = f"{vendor} {model}".strip() if vendor else model
+                    modems_dict[interface_name]['name'] = f"{vendor} {model}".strip() if (vendor or model) else f"Modem ({interface_name})"
                     modems_dict[interface_name]['source'] = "mmcli_enhanced"
             except Exception as e:
                 log_message("WARN", f"Could not get details for modem {modem_path}. Error: {e}")
@@ -269,23 +271,19 @@ def get_all_modem_statuses():
 
         for modem in status_list:
             interface_name = modem['interfaceName']
-            # Step 1: Ensure config exists in state file
             modem_proxy_config, created = get_or_create_proxy_config(interface_name, proxy_configs)
             if created:
                 proxy_configs[interface_name] = modem_proxy_config
                 configs_changed = True
 
-            # Step 2: Apply custom name if it exists
             if proxy_configs.get(interface_name, {}).get('customName'):
                  modem['name'] = proxy_configs[interface_name]['customName']
             
-            # Step 3: Update bindIp in config if it differs
             current_bind_ip = proxy_configs.get(interface_name, {}).get('bindIp')
             if modem['ipAddress'] and current_bind_ip != modem['ipAddress']:
                  proxy_configs.setdefault(interface_name, {})['bindIp'] = modem['ipAddress']
                  configs_changed = True
             
-            # Step 4: Proactively write the 3proxy config file to disk if modem is connected
             if modem['status'] == 'connected' and modem['ipAddress']:
                 write_3proxy_config_file(interface_name, modem['ipAddress'])
 
@@ -300,11 +298,8 @@ def get_all_modem_statuses():
 def proxy_action(action, interface_name):
     try:
         log_message("INFO", f"Attempting to {action} proxy for {interface_name}.")
-        # No longer need to write config here, it's done proactively.
-        # Just check if config file exists.
         config_file_path = THREPROXY_CONFIG_DIR / f"{interface_name}.cfg"
         if not config_file_path.exists() and action in ['start', 'restart']:
-            # As a fallback, try to write it now.
             log_message("WARN", f"Proxy config for {interface_name} not found. Attempting to create it now.")
             statuses_result = get_all_modem_statuses()
             if not statuses_result['success']:
@@ -377,41 +372,83 @@ def rotate_ip(interface_name):
             raise Exception("`mmcli` is required for IP rotation.")
 
         statuses_result = get_all_modem_statuses()
+        if not statuses_result.get("success"):
+            raise Exception("Failed to get current modem statuses before rotation.")
+        
         modem_to_rotate = next((m for m in statuses_result['data'] if m['interfaceName'] == interface_name), None)
         if not modem_to_rotate or 'mmcli' not in modem_to_rotate.get('source', ''):
             raise Exception(f"IP rotation is only supported for modems managed by ModemManager. {interface_name} is not one of them.")
+        
         modem_id_or_path = modem_to_rotate['id']
 
         modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'], use_sudo=True)
         modem_mm_path = None
         for m_path in modem_list_data.get('modem-list', []):
-             modem_details_data = run_and_parse_json(['mmcli', '-m', m_path, '-J'], use_sudo=True)
-             if modem_details_data.get('modem', {}).get('generic', {}).get('device-identifier') == modem_id_or_path:
-                 modem_mm_path = m_path
-                 break
+            try:
+                modem_details_data = run_and_parse_json(['mmcli', '-m', m_path, '-J'], use_sudo=True)
+                if modem_details_data.get('modem', {}).get('generic', {}).get('device-identifier') == modem_id_or_path:
+                    modem_mm_path = m_path
+                    break
+            except Exception:
+                continue
         if not modem_mm_path:
             raise Exception(f"Could not find modem path for device ID {modem_id_or_path}")
 
-        modem_details_data = run_and_parse_json(['mmcli', '-m', modem_mm_path, '-J'], use_sudo=True)
-        bearer_path = modem_details_data.get('modem', {}).get('generic', {}).get('bearer')
-        if not bearer_path or bearer_path == "/":
-            run_command(['mmcli', '-m', modem_mm_path, '--simple-connect=any'], use_sudo=True)
-        else:
-            run_command(['mmcli', '-b', bearer_path, '--disconnect'], use_sudo=True, timeout=30)
-            run_command(['sleep', '5'], timeout=10)
-            run_command(['mmcli', '-m', modem_mm_path, '--simple-connect=any'], use_sudo=True, timeout=45)
-        run_command(['sleep', '5'], timeout=10)
+        # --- New Robust Rotation Logic ---
+        log_message("INFO", f"[{interface_name}] Found modem at mmcli path: {modem_mm_path}")
         
+        # 1. Find the connected bearer
+        modem_details_data = run_and_parse_json(['mmcli', '-m', modem_mm_path, '-J'], use_sudo=True, timeout=30)
+        bearer_list = modem_details_data.get('modem', {}).get('bearers', [])
+        
+        active_bearer_path = None
+        for bearer_path in bearer_list:
+            bearer_details = run_and_parse_json(['mmcli', '-b', bearer_path, '-J'], use_sudo=True)
+            if bearer_details.get('bearer', {}).get('status', {}).get('connected', False):
+                active_bearer_path = bearer_path
+                log_message("INFO", f"[{interface_name}] Found active bearer: {active_bearer_path}")
+                break
+
+        # 2. Disconnect the active bearer if it exists
+        if active_bearer_path:
+            log_message("INFO", f"[{interface_name}] Disconnecting active bearer...")
+            run_command(['mmcli', '-b', active_bearer_path, '--disconnect'], use_sudo=True, timeout=30)
+        else:
+            log_message("WARN", f"[{interface_name}] No active bearer found to disconnect, proceeding to connect.")
+
+        # 3. Wait for disconnection to complete
+        log_message("INFO", f"[{interface_name}] Waiting 10 seconds for network deregistration...")
+        run_command(['sleep', '10'], timeout=15)
+
+        # 4. Create a new bearer to force a new IP request
+        apn = modem_details_data.get('modem', {}).get('3gpp', {}).get('operator-code')
+        apn_param = f"apn={apn}" if apn else "" # Use operator code as APN if available
+        log_message("INFO", f"[{interface_name}] Creating a new bearer...")
+        create_bearer_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, f'--create-bearer={apn_param}'], use_sudo=True, timeout=45)
+        new_bearer_path = create_bearer_result.get('bearer', {}).get('path')
+        if not new_bearer_path:
+            raise Exception(f"Failed to create a new bearer for {interface_name}.")
+        
+        log_message("INFO", f"[{interface_name}] New bearer created at {new_bearer_path}. Connecting...")
+        run_command(['mmcli', '-b', new_bearer_path, '--connect'], use_sudo=True, timeout=60)
+        
+        # 5. Wait for the new connection to stabilize
+        log_message("INFO", f"[{interface_name}] Waiting 15 seconds for new IP to be assigned and connection to stabilize...")
+        run_command(['sleep', '15'], timeout=20)
+        
+        log_message("INFO", f"[{interface_name}] Connection stabilized. Restarting proxy service.")
         restart_result = proxy_action('restart', interface_name)
         if not restart_result['success']:
              raise Exception(f"IP rotation seems successful, but failed to restart proxy: {restart_result['error']}")
 
+        # 6. Get the final new IP address
         final_statuses = get_all_modem_statuses()
         final_modem = next((m for m in final_statuses.get('data', []) if m['interfaceName'] == interface_name), None)
         new_ip = final_modem.get('publicIpAddress', 'unknown') if final_modem else 'unknown'
 
         log_message("INFO", f"IP rotated for {interface_name}. New IP: {new_ip}.")
         return {"success": True, "data": {"message": f"IP rotated for {interface_name}, new IP is {new_ip}.", "newIp": new_ip}}
+
     except Exception as e:
         log_message("ERROR", f"IP rotation for {interface_name} failed: {e}")
         return {"success": False, "error": str(e)}
@@ -451,7 +488,7 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
     elif tunnel_type == "Cloudflare":
         if not is_command_available("cloudflared"): raise Exception("`cloudflared` command not found.")
         if not cloudflare_id: raise Exception("Cloudflare Tunnel ID is required.")
-        url = f"tcp://{cloudflare_id}.trycloudflare.com" # This is just a guess, real URL may vary
+        url = f"tcp://{cloudflare_id}.trycloudflare.com"
         command = ['cloudflared', 'tunnel', 'run', '--url', f'tcp://localhost:{local_port}', cloudflare_id]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid)
         run_command(['sleep', '2'], timeout=5)
@@ -499,9 +536,12 @@ def get_available_cloudflare_tunnels():
     cf_dir = Path(os.path.expanduser("~")) / ".cloudflared"
     tunnels = []
     if cf_dir.exists():
+        # The cert file name is the tunnel ID
         for cert_file in cf_dir.glob("*.pem"):
-            tunnel_id = cert_file.stem
-            tunnels.append({"id": tunnel_id, "name": f"Cloudflare Tunnel ({tunnel_id[:8]}...)"})
+            if '-' in cert_file.stem: # Basic check for UUID format
+                tunnel_id = cert_file.stem
+                # Currently no way to get tunnel name from ID via CLI easily, so we generate a name.
+                tunnels.append({"id": tunnel_id, "name": f"Cloudflare Tunnel ({tunnel_id[:8]}...)"})
     return {"success": True, "data": tunnels}
 
 # --- vnstat Functions ---
@@ -509,15 +549,15 @@ def get_vnstat_interfaces():
     if not is_command_available("vnstat"):
         raise Exception("`vnstat` is not installed.")
     try:
-        # Get all interfaces vnstat knows about
         vnstat_interfaces_output = run_command(['vnstat', '--iflist'])
-        # Split the output and ignore the header line (e.g., "Available interfaces: ...")
-        vnstat_interfaces = set(vnstat_interfaces_output.splitlines()[1:])
+        # Process line by line and skip the header
+        vnstat_interfaces = set()
+        for line in vnstat_interfaces_output.splitlines():
+            if line.startswith("Available interfaces:"):
+                continue
+            vnstat_interfaces.update(line.strip().split())
 
-        # Get interfaces identified as modems
         modem_interfaces = set(get_modem_interface_names())
-        
-        # Find the intersection of the two sets to get only relevant interfaces
         relevant_interfaces = sorted(list(vnstat_interfaces.intersection(modem_interfaces)))
         
         log_message("DEBUG", f"Found {len(relevant_interfaces)} relevant interfaces for vnstat: {relevant_interfaces}")
@@ -530,13 +570,26 @@ def get_vnstat_interfaces():
 def get_vnstat_stats(interface_name):
     if not is_command_available("vnstat"): raise Exception("`vnstat` is not installed.")
     try:
+        # The -j flag is for hourly, -J is for others
         daily_data = run_and_parse_json(['vnstat', '-i', interface_name, '-d', '-J'])
         monthly_data = run_and_parse_json(['vnstat', '-i', interface_name, '-m', '-J'])
         hourly_data = run_and_parse_json(['vnstat', '-i', interface_name, '-h', '-j'])
         interface_stats = daily_data['interfaces'][0]
-        combined_stats = {"name": interface_stats.get('name', interface_name), "totalrx": interface_stats.get('traffic', {}).get('total', {}).get('rx', 0), "totaltx": interface_stats.get('traffic', {}).get('total', {}).get('tx', 0), "day": interface_stats.get('traffic', {}).get('day', []), "month": monthly_data['interfaces'][0].get('traffic', {}).get('month', []), "hour": hourly_data['interfaces'][0].get('traffic', {}).get('hour', [])}
+        combined_stats = {
+            "name": interface_stats.get('name', interface_name),
+            "totalrx": interface_stats.get('traffic', {}).get('total', {}).get('rx', 0),
+            "totaltx": interface_stats.get('traffic', {}).get('total', {}).get('tx', 0),
+            "day": interface_stats.get('traffic', {}).get('day', []),
+            "month": monthly_data['interfaces'][0].get('traffic', {}).get('month', []),
+            "hour": hourly_data['interfaces'][0].get('traffic', {}).get('hour', [])
+        }
         return {"success": True, "data": combined_stats}
     except Exception as e:
+        # Check for vnstat not having data yet
+        error_str = str(e)
+        if "unable to read database" in error_str.lower() or "no data available" in error_str.lower():
+             log_message("WARN", f"Vnstat has no data for {interface_name} yet.")
+             return {"success": False, "error": f"Vnstat has no data for {interface_name} yet."}
         log_message("ERROR", f"Failed to get vnstat stats for {interface_name}: {e}")
         return {"success": False, "error": str(e)}
 
@@ -624,3 +677,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
