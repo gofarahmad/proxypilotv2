@@ -163,6 +163,27 @@ def get_public_ip(interface_name):
         log_message("WARN", f"Could not fetch public IP for {interface_name}. It may not be fully online. Error: {e}")
         return None
 
+def get_modem_interface_names():
+    modems = {}
+    if not is_command_available("ip"):
+        return []
+
+    try:
+        output = run_command(['ip', '-j', 'addr'])
+        interfaces = json.loads(output)
+        modem_interface_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
+        excluded_pattern = re.compile(r'^(lo|eth|wlan|docker|veth|br-|cali|vxlan)')
+
+        for iface in interfaces:
+            ifname = iface.get('ifname', '')
+            if modem_interface_pattern.match(ifname) and not excluded_pattern.match(ifname):
+                modems[ifname] = True
+        return list(modems.keys())
+    except Exception as e:
+        log_message("ERROR", f"Error getting modem interface names: {e}")
+        return []
+
+
 def get_modems_from_ip_addr():
     modems = {}
     if not is_command_available("ip"):
@@ -485,13 +506,23 @@ def get_available_cloudflare_tunnels():
 
 # --- vnstat Functions ---
 def get_vnstat_interfaces():
-    if not is_command_available("vnstat"): raise Exception("`vnstat` is not installed.")
+    if not is_command_available("vnstat"):
+        raise Exception("`vnstat` is not installed.")
     try:
-        output = run_command(['vnstat', '--iflist'])
-        return {"success": True, "data": output.split()}
+        vnstat_interfaces_output = run_command(['vnstat', '--iflist'])
+        vnstat_interfaces = set(vnstat_interfaces_output.split())
+        
+        modem_interfaces = set(get_modem_interface_names())
+        
+        # Find the intersection of the two sets
+        relevant_interfaces = list(vnstat_interfaces.intersection(modem_interfaces))
+        
+        log_message("DEBUG", f"Found {len(relevant_interfaces)} relevant interfaces for vnstat.")
+        return {"success": True, "data": relevant_interfaces}
     except Exception as e:
-        log_message("ERROR", f"Failed to get vnstat interface list: {e}")
+        log_message("ERROR", f"Failed to get filtered vnstat interface list: {e}")
         return {"success": False, "error": str(e)}
+
 
 def get_vnstat_stats(interface_name):
     if not is_command_available("vnstat"): raise Exception("`vnstat` is not installed.")
@@ -590,5 +621,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
