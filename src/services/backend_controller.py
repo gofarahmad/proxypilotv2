@@ -1,3 +1,4 @@
+
 # src/services/backend_controller.py
 import sys
 import json
@@ -495,8 +496,8 @@ def get_vnstat_interfaces():
 def get_vnstat_stats(interface_name):
     if not is_command_available("vnstat"): raise Exception("`vnstat` is not installed.")
     try:
-        daily_data = run_and_parse_json(['vnstat', '-i', interface_name, '-d', '-j'])
-        monthly_data = run_and_parse_json(['vnstat', '-i', interface_name, '-m', '-j'])
+        daily_data = run_and_parse_json(['vnstat', '-i', interface_name, '-d', '-J'])
+        monthly_data = run_and_parse_json(['vnstat', '-i', interface_name, '-m', '-J'])
         hourly_data = run_and_parse_json(['vnstat', '-i', interface_name, '-h', '-j'])
         interface_stats = daily_data['interfaces'][0]
         combined_stats = {"name": interface_stats.get('name', interface_name), "totalrx": interface_stats.get('traffic', {}).get('total', {}).get('rx', 0), "totaltx": interface_stats.get('traffic', {}).get('total', {}).get('tx', 0), "day": interface_stats.get('traffic', {}).get('day', []), "month": monthly_data['interfaces'][0].get('traffic', {}).get('month', []), "hour": hourly_data['interfaces'][0].get('traffic', {}).get('hour', [])}
