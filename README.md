@@ -134,11 +134,12 @@ Kita akan membuat template layanan `systemd` agar kita bisa memulai instance 3pr
     # Perintah ini HARUS dijalankan setiap kali Anda mengubah file .service.
     sudo systemctl daemon-reload
 
-    # Verifikasi bahwa template layanan sudah dikenali. 
-    # Perintah ini SEHARUSNYA menampilkan "disabled". Ini NORMAL dan BENAR.
-    # Jika Anda melihat error "Unit 3proxy@.service not found", 
-    # artinya ada masalah dengan nama file atau lokasinya. Periksa kembali Langkah 4.1.
-    systemctl status 3proxy@.service
+    # Verifikasi bahwa template layanan sudah dikenali oleh systemd.
+    # Perintah ini SEHARUSNYA menampilkan output: "3proxy@.service disabled".
+    # Ini NORMAL dan BENAR. Ini mengonfirmasi bahwa systemd sekarang mengenali template Anda.
+    # Jika perintah ini tidak menghasilkan output apa pun, artinya ada masalah dengan nama
+    # atau lokasi file, atau Anda lupa menjalankan `daemon-reload`. Periksa kembali Langkah 4.1.
+    sudo systemctl list-unit-files | grep '3proxy@'
     ```
 Layanan ini **tidak akan dimulai secara otomatis**. Aplikasi Proxy Pilot akan memulai dan menghentikannya sesuai kebutuhan melalui UI. Langkah verifikasi di atas sangat penting untuk mencegah error "Unit not found" di dalam aplikasi.
 
