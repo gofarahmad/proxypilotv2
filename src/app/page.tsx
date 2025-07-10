@@ -2,11 +2,10 @@
 
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { LayoutDashboard, Wifi, Network, RotateCcw, Smartphone, BarChart3, ListChecks, Settings, AreaChart, BookText } from 'lucide-react';
+import { Wifi, Network, RotateCcw, Smartphone, BarChart3, ListChecks, Settings, AreaChart, BookText } from 'lucide-react';
 import Link from 'next/link';
 
 const overviewCards = [
-  { title: 'Dashboard', description: 'Tinjauan umum sistem Anda.', icon: LayoutDashboard, href: '/', color: 'text-indigo-500' },
   { title: 'Proxy List', description: 'Lihat proxy yang aktif dan dapat digunakan.', icon: ListChecks, href: '/proxy-list', color: 'text-teal-500' },
   { title: 'Modem Status', description: 'Monitor koneksi & IP modem.', icon: Wifi, href: '/modems', color: 'text-blue-500' },
   { title: 'Proxy Control', description: 'Kelola server proxy & tunnels.', icon: Network, href: '/proxies', color: 'text-green-500' },
