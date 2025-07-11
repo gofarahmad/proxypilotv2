@@ -41,6 +41,7 @@ export interface ModemStatus {
   proxyStatus: 'running' | 'stopped' | 'error';
   source: 'ip_addr' | 'mmcli_enhanced';
   proxyConfig?: ProxyConfig | null; 
+  serverLanIp?: string | null;
 }
 
 
@@ -66,3 +67,5 @@ export async function updateProxyConfig(interfaceName: string, config: Partial<P
     await runPythonScript(['update_proxy_config', interfaceName, JSON.stringify(config)]);
     return true;
 }
+
+    

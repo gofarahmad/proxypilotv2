@@ -30,7 +30,7 @@ interface FormattedProxy {
   id: string;
   name: string;
   interfaceName: string;
-  ipAddress: string; 
+  serverLanIp: string; 
   httpPort: number;
   socksPort: number;
   username?: string;
@@ -48,14 +48,14 @@ export default function ProxyListPage() {
       const modemStatuses: ModemStatus[] = await getAllModemStatuses();
 
       const activeProxies = modemStatuses
-        .filter(m => m.status === 'connected' && m.proxyStatus === 'running' && m.proxyConfig?.bindIp && m.proxyConfig?.httpPort && m.proxyConfig?.socksPort)
+        .filter(m => m.status === 'connected' && m.proxyStatus === 'running' && m.serverLanIp && m.proxyConfig?.httpPort && m.proxyConfig?.socksPort)
         .map(modem => {
           const config = modem.proxyConfig!;
           return {
             id: modem.id,
             name: config.customName || modem.name,
             interfaceName: modem.interfaceName,
-            ipAddress: config.bindIp!,
+            serverLanIp: modem.serverLanIp!,
             httpPort: config.httpPort!,
             socksPort: config.socksPort!,
             username: config.username,
@@ -97,7 +97,7 @@ export default function ProxyListPage() {
   
   const buildProxyString = (proxy: FormattedProxy, type: 'http' | 'socks') => {
       const port = type === 'http' ? proxy.httpPort : proxy.socksPort;
-      let str = `YOUR_SERVER_IP:${port}`;
+      let str = `${proxy.serverLanIp}:${port}`;
       if (proxy.username && proxy.password) {
           str += `:${proxy.username}:${proxy.password}`;
       }
@@ -128,12 +128,13 @@ export default function ProxyListPage() {
           </CardHeader>
           <CardContent>
             <p className="text-muted-foreground">
-              There are currently no proxies in a 'running' state.
+              There are currently no proxies in a 'running' state with a detectable server LAN IP.
             </p>
             <p className="text-muted-foreground mt-2">
               To see proxies here, please ensure:
             </p>
             <ul className="list-disc list-inside text-muted-foreground mt-1 space-y-1">
+              <li>Your server is connected to a local network (e.g., via Ethernet or Wi-Fi).</li>
               <li>A modem is 'connected' on the "Modem Status" page.</li>
               <li>The proxy server has been started and is 'running' on the "Proxy Control" page.</li>
             </ul>
@@ -150,9 +151,8 @@ export default function ProxyListPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Proxy Name</TableHead>
-                <TableHead>Listening On</TableHead>
-                <TableHead>HTTP Port</TableHead>
-                <TableHead>SOCKS5 Port</TableHead>
+                <TableHead>HTTP Proxy String</TableHead>
+                <TableHead>SOCKS5 Proxy String</TableHead>
                 <TableHead>Username</TableHead>
                 <TableHead>Password</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -166,11 +166,11 @@ export default function ProxyListPage() {
                     <div className="text-xs text-muted-foreground">{proxy.interfaceName}</div>
                   </TableCell>
                   <TableCell>
-                     <Badge variant="outline">LAN IP ({proxy.ipAddress})</Badge>
-                     <p className="text-xs text-muted-foreground mt-1">Use your server's LAN IP to connect</p>
+                     <Badge variant="outline" className="font-mono">{buildProxyString(proxy, 'http')}</Badge>
                   </TableCell>
-                   <TableCell className="font-mono text-sm">{proxy.httpPort}</TableCell>
-                   <TableCell className="font-mono text-sm">{proxy.socksPort}</TableCell>
+                   <TableCell>
+                     <Badge variant="outline" className="font-mono">{buildProxyString(proxy, 'socks')}</Badge>
+                   </TableCell>
                    <TableCell className="font-mono text-sm">{proxy.username || 'N/A'}</TableCell>
                    <TableCell className="font-mono text-sm">{proxy.password ? '••••••' : 'N/A'}</TableCell>
                   <TableCell className="text-right">
@@ -187,12 +187,6 @@ export default function ProxyListPage() {
                         </DropdownMenuItem>
                          <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(buildProxyString(proxy, 'socks'), "SOCKS5 Proxy String", proxy.name)}>
                           <Copy className="mr-2 h-4 w-4" /> Copy SOCKS5 String
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.httpPort, "HTTP Port", proxy.name)}>
-                          <NetworkIcon className="mr-2 h-4 w-4" /> Copy HTTP Port
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.socksPort, "SOCKS5 Port", proxy.name)}>
-                          <NetworkIcon className="mr-2 h-4 w-4" /> Copy SOCKS5 Port
                         </DropdownMenuItem>
                          {proxy.username && <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.username, "Username", proxy.name)}>
                            <User className="mr-2 h-4 w-4" /> Copy Username
@@ -229,26 +223,20 @@ export default function ProxyListPage() {
                 <CardDescription>Interface: {proxy.interfaceName}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="text-sm">
-                  Use your server's LAN IP to connect.
-                </div>
                 <div className="flex items-center justify-between p-2 bg-muted rounded-md text-sm font-mono">
-                  <span>HTTP Port: {proxy.httpPort}</span>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(proxy.httpPort, "HTTP Port", proxy.name)}>
+                  <span>HTTP: {buildProxyString(proxy, 'http')}</span>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(buildProxyString(proxy, 'http'), "HTTP String", proxy.name)}>
                     <ClipboardCopy className="h-4 w-4" />
-                    <span className="sr-only">Copy HTTP Port</span>
+                    <span className="sr-only">Copy HTTP String</span>
                   </Button>
                 </div>
                 <div className="flex items-center justify-between p-2 bg-muted rounded-md text-sm font-mono">
-                  <span>SOCKS5 Port: {proxy.socksPort}</span>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(proxy.socksPort, "SOCKS5 Port", proxy.name)}>
+                  <span>SOCKS5: {buildProxyString(proxy, 'socks')}</span>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(buildProxyString(proxy, 'socks'), "SOCKS5 String", proxy.name)}>
                     <ClipboardCopy className="h-4 w-4" />
-                    <span className="sr-only">Copy SOCKS5 Port</span>
+                    <span className="sr-only">Copy SOCKS5 String</span>
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Format: YOUR_SERVER_IP:Port{proxy.username && ':User:Pass'}
-                </p>
               </CardContent>
             </Card>
           ))}
@@ -261,7 +249,7 @@ export default function ProxyListPage() {
     <>
       <PageHeader
         title="Active Proxy List"
-        description="List of all currently active proxies. Use your server's LAN IP to connect from other devices."
+        description="List of all currently active proxies, ready to be copied and used."
         actions={
           <Button onClick={fetchAndFormatProxies} disabled={isLoading} variant="outline">
             <ListChecks className="mr-2 h-4 w-4" />

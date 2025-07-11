@@ -112,7 +112,7 @@ def get_or_create_proxy_config(interface_name, all_configs):
     new_http_port = PORT_RANGE_START
     while new_http_port in used_ports or (new_http_port + 1000) in used_ports:
         new_http_port += 1
-        if new_http_port + 1000 > PORT_RANGE_END + 1000:
+        if new_http_port > PORT_RANGE_END: # Check against the base port range
             raise Exception("No available ports in the specified range.")
 
     new_socks_port = new_http_port + 1000
@@ -132,6 +132,7 @@ def get_or_create_proxy_config(interface_name, all_configs):
     log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP Port {new_http_port}, SOCKS Port {new_socks_port} with user {new_username}.")
     return new_config, True
 
+
 def generate_3proxy_config_content(config, egress_ip):
     if not egress_ip or not config.get('httpPort') or not config.get('socksPort'):
         return None
@@ -143,7 +144,8 @@ def generate_3proxy_config_content(config, egress_ip):
     auth_lines = ""
     if is_authenticated:
         auth_lines = f"users {config['username']}:CL:{config['password']}\nallow {config['username']}"
-
+    
+    # Listen on all interfaces (0.0.0.0), send traffic out through the modem's IP (-e)
     return f"""daemon
 nserver 8.8.8.8
 nserver 8.8.4.4
@@ -185,8 +187,10 @@ def get_proxy_status(interface_name, modem_status):
         run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], use_sudo=True)
         return 'running'
     except subprocess.CalledProcessError:
+        # This is an expected failure if the service is not active, so we just return stopped.
         return 'stopped'
     except Exception as e:
+        # Any other exception is an actual error.
         log_message("WARN", f"Could not determine proxy status for {interface_name}: {e}")
         return 'error'
         
@@ -200,25 +204,34 @@ def get_public_ip(interface_name):
         log_message("WARN", f"Could not fetch public IP for {interface_name}. It may not be fully online.")
         return None
 
-def get_modem_interface_names():
-    modems = {}
-    if not is_command_available("ip"):
-        return []
-
+def get_primary_lan_ip():
+    """
+    Finds the primary, non-modem, non-loopback IPv4 address of the server.
+    """
     try:
         output = run_command(['ip', '-j', 'addr'])
         interfaces = json.loads(output)
-        modem_interface_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
-        excluded_pattern = re.compile(r'^(lo|eth|wlan|docker|veth|br-|cali|vxlan)')
-
+        
+        # Define patterns for modem interfaces and excluded interfaces
+        modem_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
+        excluded_pattern = re.compile(r'^(lo|docker|veth|br-|cali|vxlan)')
+        
         for iface in interfaces:
             ifname = iface.get('ifname', '')
-            if modem_interface_pattern.match(ifname) and not excluded_pattern.match(ifname):
-                modems[ifname] = True
-        return list(modems.keys())
+            
+            # Skip loopback, virtual, and modem interfaces
+            if excluded_pattern.match(ifname) or modem_pattern.match(ifname):
+                continue
+            
+            # Find the first IPv4 address on a suitable interface
+            for addr_info in iface.get('addr_info', []):
+                if addr_info.get('family') == 'inet':
+                    return addr_info.get('local')
+                    
+        return None # Return None if no suitable IP is found
     except Exception as e:
-        log_message("ERROR", f"Error getting modem interface names: {e}")
-        return []
+        log_message("ERROR", f"Could not determine primary LAN IP: {e}")
+        return None
 
 
 def get_modems_from_ip_addr():
@@ -232,6 +245,7 @@ def get_modems_from_ip_addr():
         interfaces = json.loads(output)
         modem_interface_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
         excluded_pattern = re.compile(r'^(lo|eth|wlan|docker|veth|br-|cali|vxlan)')
+        server_lan_ip = get_primary_lan_ip()
 
         for iface in interfaces:
             ifname = iface.get('ifname', '')
@@ -255,6 +269,7 @@ def get_modems_from_ip_addr():
                     "publicIpAddress": public_ip,
                     "proxyStatus": get_proxy_status(ifname, status),
                     "source": "ip_addr",
+                    "serverLanIp": server_lan_ip,
                 }
     except Exception as e:
         log_message("ERROR", f"Error detecting modems from 'ip addr': {e}")
@@ -315,6 +330,7 @@ def get_all_modem_statuses():
             if modem['proxyConfig'].get('customName'):
                  modem['name'] = modem['proxyConfig']['customName']
             
+            # Ensure bindIp is correctly set for listening on all interfaces
             proxy_configs.setdefault(interface_name, {})['bindIp'] = "0.0.0.0"
 
             if modem['status'] == 'connected' and modem['ipAddress']:
@@ -456,6 +472,7 @@ def rotate_ip(interface_name):
         apn = modem_details_data.get('modem', {}).get('3gpp', {}).get('operator-code')
         apn_param = f"apn={apn}" if apn else "" 
         log_message("INFO", f"[{interface_name}] Creating a new bearer...")
+        # Note: The bearer might not be named what we expect, so we just create and connect.
         create_bearer_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, f'--create-bearer={apn_param}'], use_sudo=True, timeout=45)
         new_bearer_path = create_bearer_result.get('bearer', {}).get('path')
         if not new_bearer_path:
@@ -502,7 +519,9 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
     
     if tunnel_type == "Ngrok":
         if not is_command_available("ngrok"): raise Exception("`ngrok` command not found.")
+        # We start ngrok in the background and detach it.
         process = subprocess.Popen(['ngrok', 'tcp', str(local_port), '--log=stdout'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid)
+        # Give ngrok a moment to start its API server
         run_command(['sleep', '2'], timeout=5)
         try:
             api_output = run_command(['curl', '-s', 'http://127.0.0.1:4040/api/tunnels'])
@@ -513,15 +532,17 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
                 raise Exception("Could not find started ngrok tunnel in ngrok API.")
             url = tunnel_info.get('public_url')
         except Exception as e:
+            # If we fail to get the URL, kill the process group to clean up.
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             raise e
     elif tunnel_type == "Cloudflare":
         if not is_command_available("cloudflared"): raise Exception("`cloudflared` command not found.")
         if not cloudflare_id: raise Exception("Cloudflare Tunnel ID is required.")
-        url = f"tcp://{cloudflare_id}.trycloudflare.com"
+        # The public URL is deterministic for Cloudflare named tunnels
+        url = f"tcp://{cloudflare_id}.trycloudflare.com" # This might need adjustment based on user's domain
         command = ['cloudflared', 'tunnel', 'run', '--url', f'tcp://localhost:{local_port}', cloudflare_id]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid)
-        run_command(['sleep', '2'], timeout=5)
+        run_command(['sleep', '2'], timeout=5) # Give it a moment to connect
     else:
         raise Exception(f"Unknown tunnel type: {tunnel_type}")
 
@@ -539,6 +560,7 @@ def stop_tunnel(tunnel_id):
         return {"success": True, "message": "Tunnel was not running."}
     pid = tunnel_info.get('pid')
     try:
+        # Kill the entire process group to stop child processes (like ngrok)
         os.killpg(os.getpgid(pid), signal.SIGTERM)
         log_message("INFO", f"Stopped tunnel {tunnel_id} with PID {pid}.")
     except OSError as e:
@@ -566,9 +588,11 @@ def get_available_cloudflare_tunnels():
     cf_dir = Path(os.path.expanduser("~")) / ".cloudflared"
     tunnels = []
     if cf_dir.exists():
+        # The cert file is the Tunnel ID
         for cert_file in cf_dir.glob("*.pem"):
-            if '-' in cert_file.stem: 
+            if '-' in cert_file.stem: # Basic check for UUID format
                 tunnel_id = cert_file.stem
+                # We don't know the tunnel *name* here, just the ID.
                 tunnels.append({"id": tunnel_id, "name": f"Cloudflare Tunnel ({tunnel_id[:8]}...)"})
     return {"success": True, "data": tunnels}
 
@@ -577,16 +601,10 @@ def get_vnstat_interfaces():
     if not is_command_available("vnstat"):
         raise Exception("`vnstat` is not installed.")
     try:
-        vnstat_interfaces_output = run_command(['vnstat', '--iflist'])
-        lines = vnstat_interfaces_output.splitlines()
-        if not lines or not lines[0].startswith("Available interfaces:"):
-             log_message("WARN", f"Unexpected output from vnstat --iflist: {vnstat_interfaces_output}")
-             return {"success": True, "data": []}
+        # Use --json output to avoid parsing text
+        vnstat_output = run_and_parse_json(['vnstat', '-J'])
+        vnstat_interfaces = {iface.get('name') for iface in vnstat_output.get('interfaces', [])}
         
-        vnstat_interfaces = set()
-        for line in lines[1:]: # Skip header line
-            vnstat_interfaces.update(line.strip().split())
-
         modem_interfaces = set(get_modem_interface_names())
         relevant_interfaces = sorted(list(vnstat_interfaces.intersection(modem_interfaces)))
         
@@ -596,6 +614,25 @@ def get_vnstat_interfaces():
         log_message("ERROR", f"Failed to get filtered vnstat interface list: {e}")
         return {"success": False, "error": str(e)}
 
+def get_modem_interface_names():
+    modems = {}
+    if not is_command_available("ip"):
+        return []
+
+    try:
+        output = run_command(['ip', '-j', 'addr'])
+        interfaces = json.loads(output)
+        modem_interface_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
+        excluded_pattern = re.compile(r'^(lo|eth|wlan|docker|veth|br-|cali|vxlan)')
+
+        for iface in interfaces:
+            ifname = iface.get('ifname', '')
+            if modem_interface_pattern.match(ifname) and not excluded_pattern.match(ifname):
+                modems[ifname] = True
+        return list(modems.keys())
+    except Exception as e:
+        log_message("ERROR", f"Error getting modem interface names: {e}")
+        return []
 
 def get_vnstat_stats(interface_name):
     if not is_command_available("vnstat"): raise Exception("`vnstat` is not installed.")
