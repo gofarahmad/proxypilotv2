@@ -24,14 +24,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { ModemStatus } from '@/services/network-service';
 
 interface FormattedProxy {
   id: string;
   name: string;
   interfaceName: string;
-  // We no longer build the full string here, as the IP is dynamic.
-  // We provide the components to be copied.
-  ipAddress: string; // Will be 0.0.0.0
+  ipAddress: string; 
   httpPort: number;
   socksPort: number;
   username?: string;
@@ -46,27 +45,21 @@ export default function ProxyListPage() {
   const fetchAndFormatProxies = useCallback(async () => {
     setIsLoading(true);
     try {
-      const modemStatuses = await getAllModemStatuses();
+      const modemStatuses: ModemStatus[] = await getAllModemStatuses();
 
       const activeProxies = modemStatuses
         .filter(m => m.status === 'connected' && m.proxyStatus === 'running' && m.proxyConfig?.bindIp && m.proxyConfig?.httpPort && m.proxyConfig?.socksPort)
         .map(modem => {
           const config = modem.proxyConfig!;
-          const ip = config.bindIp!; // This will be 0.0.0.0
-          const httpPort = config.httpPort!;
-          const socksPort = config.socksPort!;
-          const username = config.username;
-          const password = config.password;
-
           return {
             id: modem.id,
             name: config.customName || modem.name,
             interfaceName: modem.interfaceName,
-            ipAddress: ip,
-            httpPort: httpPort,
-            socksPort: socksPort,
-            username: username,
-            password: password,
+            ipAddress: config.bindIp!,
+            httpPort: config.httpPort!,
+            socksPort: config.socksPort!,
+            username: config.username,
+            password: config.password,
           } as FormattedProxy;
         });
 
@@ -82,7 +75,7 @@ export default function ProxyListPage() {
 
   useEffect(() => {
     fetchAndFormatProxies();
-    const interval = setInterval(fetchAndFormatProxies, 30000); // Refresh every 30 seconds
+    const interval = setInterval(fetchAndFormatProxies, 30000); 
     return () => clearInterval(interval);
   }, [fetchAndFormatProxies]);
 
@@ -103,7 +96,6 @@ export default function ProxyListPage() {
   };
   
   const buildProxyString = (proxy: FormattedProxy, type: 'http' | 'socks') => {
-      // Note: The user needs to replace 'YOUR_SERVER_IP' with their actual server LAN IP.
       const port = type === 'http' ? proxy.httpPort : proxy.socksPort;
       let str = `YOUR_SERVER_IP:${port}`;
       if (proxy.username && proxy.password) {
@@ -158,7 +150,7 @@ export default function ProxyListPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Proxy Name</TableHead>
-                <TableHead>Listening IP</TableHead>
+                <TableHead>Listening On</TableHead>
                 <TableHead>HTTP Port</TableHead>
                 <TableHead>SOCKS5 Port</TableHead>
                 <TableHead>Username</TableHead>
@@ -174,8 +166,8 @@ export default function ProxyListPage() {
                     <div className="text-xs text-muted-foreground">{proxy.interfaceName}</div>
                   </TableCell>
                   <TableCell>
-                     <Badge variant="outline">{proxy.ipAddress}</Badge>
-                     <p className="text-xs text-muted-foreground mt-1">Accessible on your LAN IP</p>
+                     <Badge variant="outline">LAN IP ({proxy.ipAddress})</Badge>
+                     <p className="text-xs text-muted-foreground mt-1">Use your server's LAN IP to connect</p>
                   </TableCell>
                    <TableCell className="font-mono text-sm">{proxy.httpPort}</TableCell>
                    <TableCell className="font-mono text-sm">{proxy.socksPort}</TableCell>

@@ -320,3 +320,5 @@ Fitur ini memungkinkan Anda mengekspos proxy lokal Anda ke internet menggunakan 
     *   Pilih tunnel tersebut, pilih proxy lokal yang ingin Anda hubungkan, dan klik "Create Tunnel".
 
 Sistem sekarang akan menghubungkan proxy lokal Anda ke domain kustom Anda melalui Cloudflare, tanpa Anda perlu memasukkan API key apa pun ke dalam aplikasi.
+
+    

@@ -6,12 +6,13 @@ Ini adalah aplikasi Next.js yang dirancang untuk mengelola, memonitor, dan meman
 ## Fitur Utama
 
 - **Deteksi Modem Hibrida:** Secara otomatis mendeteksi modem USB baik yang beroperasi dalam mode serial (ppp) maupun mode ethernet (RNDIS/NCM).
-- **Manajemen Proxy:** Membuat, memulai, menghentikan, dan me-restart instance proxy untuk setiap modem secara dinamis.
+- **Manajemen Proxy (3proxy):** Membuat, memulai, menghentikan, dan me-restart instance 3proxy untuk setiap modem secara dinamis.
 - **Konfigurasi Otomatis:** Secara otomatis menghasilkan port, username, dan password untuk setiap proxy.
 - **Rotasi IP:** Kemampuan untuk merotasi alamat IP modem dengan satu klik (memerlukan ModemManager).
 - **Auto-Rotate:** Jadwalkan rotasi IP otomatis untuk setiap modem.
 - **Kontrol Modem (Opsional):** Kirim perintah SMS dan USSD langsung dari antarmuka web (memerlukan ModemManager).
 - **Manajemen Tunnel:** Lihat dan kelola tunnel Ngrok/Cloudflare dari UI.
+- **AI-Powered Rebinding:** Gunakan AI untuk mendeteksi perubahan IP dan mengikat ulang proxy secara otomatis.
 
 ---
 
@@ -31,6 +32,7 @@ Aplikasi ini bergantung pada beberapa perangkat lunak sistem kunci untuk berfung
 - **`ModemManager` & `usb-modeswitch` (Opsional tapi Direkomendasikan):** Layanan sistem Linux yang dibutuhkan untuk fitur-fitur lanjutan seperti rotasi IP, kirim SMS, dan USSD. Deteksi modem dasar akan tetap berfungsi tanpanya.
 - **`nginx` (Opsional tapi Direkomendasikan):** Diperlukan jika Anda ingin mengakses aplikasi tanpa nomor port.
 - **`cloudflared` (Opsional):** Diperlukan jika Anda ingin menggunakan fitur Cloudflare Tunnel.
+- **`curl`:** Diperlukan untuk mengambil IP publik.
 
 ### 2. Pengetahuan & Kemampuan
 
@@ -318,3 +320,5 @@ Fitur ini memungkinkan Anda mengekspos proxy lokal Anda ke internet menggunakan 
     *   Pilih tunnel tersebut, pilih proxy lokal yang ingin Anda hubungkan, dan klik "Create Tunnel".
 
 Sistem sekarang akan menghubungkan proxy lokal Anda ke domain kustom Anda melalui Cloudflare, tanpa Anda perlu memasukkan API key apa pun ke dalam aplikasi.
+
+    
