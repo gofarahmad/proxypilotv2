@@ -185,7 +185,7 @@ def run_and_parse_json(command_list: List[str], timeout: Optional[int] = None) -
 def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[Dict, bool]:
     """
     Gets an existing proxy config or generates a new one with non-overlapping port ranges.
-    This is the corrected logic.
+    This is the corrected, definitive logic.
     """
     if interface_name in all_configs and all(k in all_configs[interface_name] for k in ['httpPort', 'socksPort']):
         return all_configs[interface_name], False
@@ -770,3 +770,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
