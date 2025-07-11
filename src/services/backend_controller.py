@@ -106,10 +106,16 @@ def write_state_file(file_path: Path, data: Any) -> bool:
         return False
 
 # --- Command Execution ---
-def run_command(command_list: List[str], timeout: Optional[int] = None, check: bool = True) -> str:
+def run_command(
+    command_list: List[str], 
+    timeout: Optional[int] = None, 
+    check: bool = True,
+    suppress_error: bool = False
+) -> str:
     """
     Executes a system command and captures its output.
     Uses 'pkexec' for commands requiring root privileges.
+    If suppress_error is True, it returns stderr instead of raising an exception.
     """
     if timeout is None:
         timeout = CONFIG['DEFAULT_TIMEOUT']
@@ -145,6 +151,9 @@ def run_command(command_list: List[str], timeout: Optional[int] = None, check: b
         error_output = e.stderr.strip() if e.stderr else "No error output."
         log_message("ERROR", f"Command failed: {' '.join(command_list)}. Stderr: {error_output}")
         
+        if suppress_error:
+            return error_output
+
         if "couldn't find bearer" in error_output.lower():
             return json.dumps({"bearer_error": True, "message": "Modem bearer (data connection) not found."})
         if "unable to read database" in error_output.lower():
@@ -179,21 +188,19 @@ def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[
     if interface_name in all_configs and all(k in all_configs[interface_name] for k in ['httpPort', 'socksPort']):
         return all_configs[interface_name], False
 
-    used_ports = {
-        port for config in all_configs.values() for key, port in config.items() if key in ['httpPort', 'socksPort']
-    }
+    used_http_ports = {c.get('httpPort') for c in all_configs.values() if c.get('httpPort')}
+    used_socks_ports = {c.get('socksPort') for c in all_configs.values() if c.get('socksPort')}
     
     # Find available HTTP port
     http_port = CONFIG['HTTP_PORT_RANGE_START']
-    while http_port in used_ports:
+    while http_port in used_http_ports:
         http_port += 1
         if http_port > CONFIG['HTTP_PORT_RANGE_END']:
             raise Exception("No available HTTP ports in the specified range.")
-    used_ports.add(http_port)
 
     # Find available SOCKS port
     socks_port = CONFIG['SOCKS_PORT_RANGE_START']
-    while socks_port in used_ports:
+    while socks_port in used_socks_ports:
         socks_port += 1
         if socks_port > CONFIG['SOCKS_PORT_RANGE_END']:
             raise Exception("No available SOCKS ports in the specified range.")
@@ -288,10 +295,16 @@ def is_command_available(command):
 
 def get_proxy_status(interface_name: str) -> str:
     """Checks if the 3proxy service for a specific interface is active."""
-    try:
-        run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], check=True)
+    # This command is expected to fail if the service is not active.
+    # We suppress the exception and check the output.
+    result = run_command(
+        ['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], 
+        check=False, 
+        suppress_error=True
+    )
+    if result == 'active':
         return 'running'
-    except Exception:
+    else:
         return 'stopped'
 
 
@@ -647,7 +660,7 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
         pids[tunnel_id] = {
             "pid": pid,
             "localPort": local_port,
-            "linkedTo": linkedTo,
+            "linkedTo": linked_to,
             "type": tunnel_type,
             "url": None
         }
@@ -759,3 +772,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
