@@ -60,7 +60,7 @@ export async function sendSms(interfaceName: string, recipient: string, message:
  * @returns A promise that resolves to an array of SMS messages.
  */
 export async function readSms(interfaceName: string): Promise<SmsMessage[]> {
-    const data = await runPythonScript(['read-sms', interfaceName, '{}']);
+    const data = await runPythonScript(['read-sms', interfaceName]);
     return data;
 }
 
@@ -75,3 +75,5 @@ export async function sendUssd(interfaceName: string, ussdCode: string): Promise
     const data = await runPythonScript(['send-ussd', interfaceName, JSON.stringify(args)]);
     return { success: true, response: data.response };
 }
+
+      
