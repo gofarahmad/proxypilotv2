@@ -18,8 +18,8 @@ TUNNEL_PIDS_FILE = STATE_DIR / "tunnel_pids.json"
 LOG_FILE = STATE_DIR / "activity.log"
 LOG_MAX_ENTRIES = 200
 THREPROXY_CONFIG_DIR = Path("/etc/3proxy/conf")
-PORT_RANGE_START = 30000
-PORT_RANGE_END = 31000
+PORT_RANGE_START = 10000
+PORT_RANGE_END = 11000
 
 # --- Logging Helper ---
 def log_message(level, message):
@@ -41,7 +41,6 @@ def log_message(level, message):
 # --- Helper Functions ---
 def run_command(command_list, use_sudo=False, timeout=15):
     try:
-        # For systemctl commands, sudo might be required depending on user setup
         if command_list[0] == 'systemctl':
             use_sudo = True
         
@@ -58,7 +57,6 @@ def run_command(command_list, use_sudo=False, timeout=15):
         error_output = e.stderr.strip() if e.stderr else "No error output."
         log_message("ERROR", f"Command failed: {' '.join(command_list)}. Error: {error_output}")
         if "couldn't find bearer" in error_output.lower():
-            # This is a special case for rotation, not a fatal error
             return json.dumps({"bearer_error": True, "message": error_output})
         if "unable to read database" in error_output.lower():
              return json.dumps({"vnstat_error": "not_ready", "message": error_output})
@@ -93,34 +91,54 @@ def write_state_file(file_path, data):
         json.dump(data, f, indent=4)
 
 def get_or_create_proxy_config(interface_name, all_configs):
-    if interface_name in all_configs and 'port' in all_configs[interface_name]:
+    if interface_name in all_configs and 'httpPort' in all_configs[interface_name] and 'socksPort' in all_configs[interface_name]:
         return all_configs[interface_name], False
-    used_ports = {config.get('port') for config in all_configs.values() if 'port' in config}
-    new_port = PORT_RANGE_START
-    while new_port in used_ports:
-        new_port += 1
-        if new_port > PORT_RANGE_END:
+    
+    used_ports = set()
+    for config in all_configs.values():
+        if 'httpPort' in config: used_ports.add(config['httpPort'])
+        if 'socksPort' in config: used_ports.add(config['socksPort'])
+
+    new_http_port = PORT_RANGE_START
+    while new_http_port in used_ports or (new_http_port + 1) in used_ports:
+        new_http_port += 2
+        if new_http_port + 1 > PORT_RANGE_END:
             raise Exception("No available ports in the specified range.")
-    new_config = {"port": new_port, "username": "", "password": "", "type": "Proxy", "bindIp": None, "customName": None}
-    log_message("INFO", f"Generated new proxy config for {interface_name} on port {new_port}.")
+
+    new_socks_port = new_http_port + 1
+    
+    new_config = {
+        "httpPort": new_http_port, 
+        "socksPort": new_socks_port,
+        "username": "", 
+        "password": "", 
+        "type": "Proxy", 
+        "bindIp": None, 
+        "customName": None
+    }
+    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP Port {new_http_port} and SOCKS Port {new_socks_port}.")
     return new_config, True
 
 def generate_3proxy_config_content(config, ip_address):
-    if not ip_address or not config.get('port'):
+    if not ip_address or not config.get('httpPort') or not config.get('socksPort'):
         return None
+    
+    http_port = config['httpPort']
+    socks_port = config['socksPort']
     is_authenticated = config.get('username') and config.get('password')
+    
     auth_lines = ""
     if is_authenticated:
         auth_lines = f"users {config['username']}:CL:{config['password']}\nallow {config['username']}"
-    # Bind to the modem's local IP, but allow outbound connections via that IP.
+
     return f"""daemon
 nserver 8.8.8.8
 nserver 8.8.4.4
 nscache 65536
 timeouts 1 5 30 60 180 1800 15 60
 {auth_lines}
-proxy -p{config['port']} -i{ip_address} -e{ip_address}
-socks -p{config['port']} -i{ip_address} -e{ip_address}
+proxy -p{http_port} -i{ip_address} -e{ip_address}
+socks -p{socks_port} -i{ip_address} -e{ip_address}
 """
 
 def write_3proxy_config_file(interface_name, ip_address):

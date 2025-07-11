@@ -75,10 +75,11 @@ export function TunnelConfigForm() {
         if (!selectedModem) throw new Error("Selected modem not found or is no longer eligible.");
         
         const proxyConfig = await getProxyConfig(data.ngrokTargetInterface);
-        if (!proxyConfig?.port) throw new Error(`Proxy port for ${data.ngrokTargetInterface} is not configured.`);
+        // Default to tunneling HTTP port
+        if (!proxyConfig?.httpPort) throw new Error(`Proxy HTTP port for ${data.ngrokTargetInterface} is not configured.`);
         
-        tunnelId = `tunnel_${data.ngrokTargetInterface}`;
-        localPort = proxyConfig.port;
+        tunnelId = `tunnel_http_${data.ngrokTargetInterface}`;
+        localPort = proxyConfig.httpPort;
         linkedTo = selectedModem.name;
 
       } else if (data.tunnelType === 'Cloudflare') {
@@ -89,10 +90,11 @@ export function TunnelConfigForm() {
         if (!selectedModem) throw new Error("Selected target modem not found or is no longer eligible.");
         
         const proxyConfig = await getProxyConfig(data.cloudflareTargetInterface);
-        if (!proxyConfig?.port) throw new Error(`Proxy port for ${data.cloudflareTargetInterface} is not configured.`);
+        // Default to tunneling HTTP port
+        if (!proxyConfig?.httpPort) throw new Error(`Proxy HTTP port for ${data.cloudflareTargetInterface} is not configured.`);
 
         tunnelId = `tunnel_cf_${data.cloudflareTunnelId}`; // Use a unique ID format for CF tunnels
-        localPort = proxyConfig.port;
+        localPort = proxyConfig.httpPort;
         linkedTo = `CF: ${data.cloudflareTunnelId.substring(0, 8)}... -> ${selectedModem.name}`;
         cloudflareId = data.cloudflareTunnelId;
       
@@ -172,7 +174,7 @@ export function TunnelConfigForm() {
                             <SelectContent>
                             {eligibleModems.length > 0 ? eligibleModems.map(modem => (
                                 <SelectItem key={modem.interfaceName} value={modem.interfaceName}>
-                                {modem.name} ({modem.interfaceName}) - IP: {modem.ipAddress}
+                                {modem.name} ({modem.interfaceName}) - HTTP Port: {modem.proxyConfig?.httpPort}
                                 </SelectItem>
                             )) : (
                                 <SelectItem value="none" disabled>No eligible modems found</SelectItem>
@@ -228,7 +230,7 @@ export function TunnelConfigForm() {
                                 <SelectContent>
                                 {eligibleModems.length > 0 ? eligibleModems.map(modem => (
                                     <SelectItem key={modem.interfaceName} value={modem.interfaceName}>
-                                    {modem.name} (Port: {modem.ipAddress})
+                                    {modem.name} (HTTP Port: {modem.proxyConfig?.httpPort})
                                     </SelectItem>
                                 )) : (
                                     <SelectItem value="none" disabled>No eligible proxies found</SelectItem>
@@ -250,5 +252,3 @@ export function TunnelConfigForm() {
     </Form>
   );
 }
-
-    

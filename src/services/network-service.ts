@@ -40,7 +40,7 @@ export interface ModemStatus {
   publicIpAddress: string | null;
   proxyStatus: 'running' | 'stopped' | 'error';
   source: 'ip_addr' | 'mmcli_enhanced';
-  proxyConfig?: ProxyConfig | null; // <-- Added this
+  proxyConfig?: ProxyConfig | null; 
 }
 
 

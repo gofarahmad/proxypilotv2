@@ -52,7 +52,8 @@ export async function restartProxy(interfaceName: string): Promise<boolean> {
 }
 
 export interface ProxyConfig {
-    port: number;
+    httpPort: number;
+    socksPort: number;
     bindIp?: string;
     username?: string;
     password?: string;

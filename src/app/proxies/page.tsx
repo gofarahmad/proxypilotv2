@@ -115,14 +115,20 @@ export default function ProxyControlPage() {
       
       const proxiesWithDetails = await Promise.all(
         modemData.map(async (m) => {
-          const config = await getProxyConfig(m.interfaceName);
-          const tunnelId = `tunnel_${m.interfaceName}`;
-          const tunnel = await getTunnelStatus(tunnelId);
+          // Tunnel logic remains, as it's a separate state system
+          const tunnelIdHttp = `tunnel_http_${m.interfaceName}`;
+          const tunnelIdSocks = `tunnel_socks_${m.interfaceName}`;
+          const tunnelHttp = await getTunnelStatus(tunnelIdHttp);
+          const tunnelSocks = await getTunnelStatus(tunnelIdSocks);
+          // For simplicity, we can just check one tunnel for the UI status, or combine them.
+          // Let's assume for now we only tunnel one port, e.g. HTTP.
+          const tunnel = tunnelHttp || tunnelSocks;
+
           return { 
             ...m, 
             proxyLoading: false, 
             tunnelLoading: false,
-            config: config,
+            config: m.proxyConfig || null,
             tunnel: tunnel 
           };
         })
@@ -148,10 +154,9 @@ export default function ProxyControlPage() {
     setProxies(prev => prev.map(p => p.interfaceName === interfaceName ? { ...p, proxyLoading: true } : p));
     
     try {
-      let success = false;
-      if (action === 'start') success = await startProxy(interfaceName);
-      else if (action === 'stop') success = await stopProxy(interfaceName);
-      else success = await restartProxy(interfaceName);
+      if (action === 'start') await startProxy(interfaceName);
+      else if (action === 'stop') await stopProxy(interfaceName);
+      else await restartProxy(interfaceName);
 
       toast({
         title: `Proxy ${action} initiated`,
@@ -168,16 +173,17 @@ export default function ProxyControlPage() {
   };
 
   const handleTunnelAction = async (proxy: ProxyInstance, action: 'start' | 'stop') => {
-      if (!proxy.config?.port) {
-          toast({ title: "Cannot Start Tunnel", description: "Proxy port is not configured.", variant: "destructive" });
+      // Tunneling the HTTP port by default
+      if (!proxy.config?.httpPort) {
+          toast({ title: "Cannot Start Tunnel", description: "Proxy HTTP port is not configured.", variant: "destructive" });
           return;
       }
       setProxies(prev => prev.map(p => p.interfaceName === proxy.interfaceName ? { ...p, tunnelLoading: true } : p));
       
-      const tunnelId = `tunnel_${proxy.interfaceName}`;
+      const tunnelId = `tunnel_http_${proxy.interfaceName}`;
       try {
           if (action === 'start') {
-              await startTunnel(tunnelId, proxy.config.port, proxy.name, 'Ngrok');
+              await startTunnel(tunnelId, proxy.config.httpPort, proxy.name, 'Ngrok');
           } else {
               await stopTunnel(tunnelId);
           }
@@ -227,6 +233,9 @@ export default function ProxyControlPage() {
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {proxies.map((proxy) => {
           const isAuthenticated = proxy.config?.username && proxy.config?.password;
+          const httpPort = proxy.config?.httpPort || 'N/A';
+          const socksPort = proxy.config?.socksPort || 'N/A';
+
           return (
             <Card key={proxy.interfaceName} className={`shadow-md flex flex-col ${proxy.status !== 'connected' ? 'bg-muted/30' : ''}`}>
                 <CardHeader>
@@ -234,22 +243,33 @@ export default function ProxyControlPage() {
                         <CardTitle className="text-lg">Proxy on {proxy.name}</CardTitle>
                         <Network className="h-5 w-5 text-primary" />
                     </div>
-                    <CardDescription>IF: {proxy.interfaceName} | IP: {proxy.ipAddress || 'N/A'} | Port: {proxy.config?.port || 'N/A'}</CardDescription>
+                    <CardDescription>
+                      IF: {proxy.interfaceName} | IP: {proxy.ipAddress || 'N/A'}
+                    </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3 flex-grow flex flex-col justify-between">
                 <div>
                     <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium">Proxy Status:</span>
-                    <Badge variant={proxy.proxyStatus === 'running' ? 'default' : (proxy.proxyStatus === 'stopped' ? 'secondary' : 'destructive')}
-                        className={`
-                        ${proxy.proxyStatus === 'running' ? 'bg-green-500/20 text-green-700 border-green-500' : ''}
-                        ${proxy.proxyStatus === 'stopped' ? 'bg-gray-500/20 text-gray-700 border-gray-500' : ''}
-                        ${proxy.proxyStatus === 'error' ? 'bg-red-500/20 text-red-700 border-red-500' : ''}
-                        `}
-                    >
-                        {proxy.proxyStatus === 'error' ? <ServerCrash className="inline mr-1 h-4 w-4" /> : null}
-                        {proxy.proxyStatus}
-                    </Badge>
+                        <span className="text-sm font-medium">HTTP Port:</span>
+                        <span className="font-mono text-sm">{httpPort}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium">SOCKS5 Port:</span>
+                        <span className="font-mono text-sm">{socksPort}</span>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-2">
+                        <span className="text-sm font-medium">Proxy Status:</span>
+                        <Badge variant={proxy.proxyStatus === 'running' ? 'default' : (proxy.proxyStatus === 'stopped' ? 'secondary' : 'destructive')}
+                            className={`
+                            ${proxy.proxyStatus === 'running' ? 'bg-green-500/20 text-green-700 border-green-500' : ''}
+                            ${proxy.proxyStatus === 'stopped' ? 'bg-gray-500/20 text-gray-700 border-gray-500' : ''}
+                            ${proxy.proxyStatus === 'error' ? 'bg-red-500/20 text-red-700 border-red-500' : ''}
+                            `}
+                        >
+                            {proxy.proxyStatus === 'error' ? <ServerCrash className="inline mr-1 h-4 w-4" /> : null}
+                            {proxy.proxyStatus}
+                        </Badge>
                     </div>
 
                     <div className="flex items-center justify-between mt-2">
@@ -354,5 +374,3 @@ export default function ProxyControlPage() {
     </>
   );
 }
-
-    
