@@ -20,7 +20,7 @@ LOG_FILE = STATE_DIR / "activity.log"
 LOG_MAX_ENTRIES = 200
 THREPROXY_CONFIG_DIR = Path("/etc/3proxy/conf")
 PORT_RANGE_START = 7001
-PORT_RANGE_END = 8001
+PORT_RANGE_END = 8000
 
 # --- Logging Helper ---
 def log_message(level, message):
@@ -186,13 +186,9 @@ def get_proxy_status(interface_name, modem_status):
     try:
         run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], use_sudo=True)
         return 'running'
-    except subprocess.CalledProcessError:
+    except Exception:
         # This is an expected failure if the service is not active, so we just return stopped.
         return 'stopped'
-    except Exception as e:
-        # Any other exception is an actual error.
-        log_message("WARN", f"Could not determine proxy status for {interface_name}: {e}")
-        return 'error'
         
 def get_public_ip(interface_name):
     if not is_command_available("curl"):
