@@ -9,6 +9,7 @@ import shutil
 import datetime
 import re
 import signal
+import secrets
 
 # --- Configuration ---
 STATE_DIR = Path(os.path.expanduser("~")) / ".proxy_pilot_state"
@@ -18,8 +19,8 @@ TUNNEL_PIDS_FILE = STATE_DIR / "tunnel_pids.json"
 LOG_FILE = STATE_DIR / "activity.log"
 LOG_MAX_ENTRIES = 200
 THREPROXY_CONFIG_DIR = Path("/etc/3proxy/conf")
-PORT_RANGE_START = 10000
-PORT_RANGE_END = 11000
+PORT_RANGE_START = 8000
+PORT_RANGE_END = 9000
 
 # --- Logging Helper ---
 def log_message(level, message):
@@ -107,16 +108,20 @@ def get_or_create_proxy_config(interface_name, all_configs):
 
     new_socks_port = new_http_port + 1
     
+    # Generate random username and password
+    new_username = f"user_{secrets.token_hex(2)}"
+    new_password = secrets.token_hex(8)
+
     new_config = {
         "httpPort": new_http_port, 
         "socksPort": new_socks_port,
-        "username": "", 
-        "password": "", 
+        "username": new_username, 
+        "password": new_password, 
         "type": "Proxy", 
         "bindIp": None, 
         "customName": None
     }
-    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP Port {new_http_port} and SOCKS Port {new_socks_port}.")
+    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP Port {new_http_port}, SOCKS Port {new_socks_port} with user {new_username}.")
     return new_config, True
 
 def generate_3proxy_config_content(config, ip_address):
@@ -701,3 +706,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
