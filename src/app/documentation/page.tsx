@@ -7,7 +7,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { AlertCircle, Wifi, Network, RotateCcw, Smartphone, KeyRound } from 'lucide-react';
+import { AlertCircle, Wifi, Network, RotateCcw, Smartphone, HelpCircle } from 'lucide-react';
 
 export default function DocumentationPage() {
   return (
@@ -25,6 +25,41 @@ export default function DocumentationPage() {
         </CardHeader>
         <CardContent>
           <Accordion type="single" collapsible className="w-full">
+            <AccordionItem value="item-hilink">
+              <AccordionTrigger>
+                <div className="flex items-center gap-2 font-bold text-indigo-600">
+                  <HelpCircle className="h-5 w-5" />
+                  <span>Important: HiLink/Ethernet Modems vs. Stick Modems</span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="prose prose-sm max-w-none">
+                <p>There are two main types of USB modems, and they behave very differently. Understanding which type you have is key to knowing which features are available to you.</p>
+                <h4>Stick Mode (Full Feature Support)</h4>
+                <ul className="list-disc pl-5">
+                  <li><strong>How it works:</strong> The modem presents itself as a traditional serial device (like `ppp0` or `wwan0`). The operating system (via `ModemManager`) is responsible for establishing and managing the connection.</li>
+                  <li><strong>Feature Support:</strong>
+                    <ul className='list-disc pl-5'>
+                      <li>✅ Proxy Creation & Control</li>
+                      <li>✅ **IP Rotation (Manual & Automatic)**</li>
+                      <li>✅ **Modem Control (Send/Read SMS, USSD Commands)**</li>
+                    </ul>
+                  </li>
+                  <li><strong>How to identify:</strong> These modems are explicitly detected by `mmcli` and will have `mmcli_enhanced` as their source on the Modem Status page. Rotation and Control features will be enabled for them.</li>
+                </ul>
+                <h4>HiLink / RNDIS Mode (Partial Feature Support)</h4>
+                 <ul className="list-disc pl-5">
+                  <li><strong>How it works:</strong> The modem acts like a mini-router or USB Ethernet adapter. It manages the cellular connection internally and provides a simple network connection to your server (like `enx...` or `usb...`). Your server gets an IP address from the modem itself (e.g., 192.168.8.100).</li>
+                  <li><strong>Feature Support:</strong>
+                     <ul className='list-disc pl-5'>
+                        <li>✅ Proxy Creation & Control</li>
+                        <li>❌ **IP Rotation is NOT supported.** The application has no standard way to tell this type of modem to get a new IP address.</li>
+                        <li>❌ **Modem Control (SMS/USSD) is NOT supported.** The cellular functions are hidden behind the modem's internal router.</li>
+                    </ul>
+                  </li>
+                   <li><strong>How to identify:</strong> These modems are detected as standard network interfaces. On the IP Rotation and Modem Control pages, you will see messages indicating that the features are unavailable for this modem type.</li>
+                </ul>
+              </AccordionContent>
+            </AccordionItem>
             <AccordionItem value="item-1">
               <AccordionTrigger>
                 <div className="flex items-center gap-2">
@@ -35,8 +70,8 @@ export default function DocumentationPage() {
               <AccordionContent className="prose prose-sm max-w-none">
                 <p>Proxy Pilot uses a hybrid detection method:</p>
                 <ul className="list-disc pl-5">
-                  <li><strong>Primary Method (ip addr):</strong> The application first uses the standard Linux `ip addr` command to find network interfaces that look like USB modems (e.g., `enx...`, `usb...`, `ppp...`). This method is fast and works for most modems.</li>
-                  <li><strong>Enhancement (ModemManager):</strong> If `ModemManager` is installed and running, the application will then use `mmcli` to get more detailed information, such as the modem's real name (e.g., "Huawei E3372") and its unique device ID. This enhancement is crucial for advanced features like IP Rotation and SMS/USSD control.</li>
+                  <li><strong>Primary Method (ip addr):</strong> The application first uses the standard Linux `ip addr` command to find network interfaces that look like USB modems (e.g., `enx...`, `usb...`, `ppp...`). This method is fast and works for all modem types, including HiLink.</li>
+                  <li><strong>Enhancement (ModemManager):</strong> If `ModemManager` is installed and running, the application will then use `mmcli` to get more detailed information for "Stick Mode" modems, such as their real name (e.g., "Huawei E3372") and device ID. This enhancement is crucial for advanced features like IP Rotation and SMS/USSD control.</li>
                 </ul>
               </AccordionContent>
             </AccordionItem>
@@ -71,14 +106,14 @@ export default function DocumentationPage() {
                 </div>
               </AccordionTrigger>
               <AccordionContent className="prose prose-sm max-w-none">
-                <p>IP Rotation is a powerful feature, but it has a specific requirement: **the modem must be managed by ModemManager (`mmcli`).**</p>
+                <p>IP Rotation is a powerful feature, but it has a specific requirement: **the modem must be a "Stick Mode" device managed by ModemManager (`mmcli`).**</p>
                 <p>
-                  When a modem is detected just as a standard network interface (e.g., `enx...`), the system doesn't have a standardized way to tell it to disconnect and reconnect to get a new IP address. `ModemManager` provides this necessary control layer.
+                  Modems that act like Ethernet adapters (HiLink mode, with interfaces like `enx...`) handle their connections internally. The operating system has no standard way to command them to disconnect and reconnect to get a new IP address. `ModemManager` provides this necessary control layer for compatible stick modems.
                 </p>
                 <p><strong>To enable IP Rotation:</strong></p>
                  <ul className="list-disc pl-5">
                   <li>Ensure `modemmanager` is installed on your server (`sudo apt install modemmanager`).</li>
-                  <li>Make sure your modem is recognized by `mmcli`. You can check this by running `mmcli -L` in your server's terminal.</li>
+                  <li>Use a "Stick Mode" modem that is recognized by `mmcli`. You can check this by running `mmcli -L` in your server's terminal.</li>
                   <li>On the "IP Rotation" page, the "Rotate" buttons will be automatically enabled for any modem detected via this enhanced method.</li>
                 </ul>
               </AccordionContent>
@@ -92,8 +127,8 @@ export default function DocumentationPage() {
                 </div>
               </AccordionTrigger>
               <AccordionContent className="prose prose-sm max-w-none">
-                <p>Just like IP Rotation, the ability to send SMS and USSD commands relies entirely on **ModemManager (`mmcli`)**. This is because `mmcli` provides the specific commands (`--messaging-create-sms`, `--3gpp-ussd-initiate`) to interact with the modem's cellular functions.</p>
-                <p>If no modems managed by `mmcli` are detected, the "Modem Control" page will show a warning and all its features will be disabled.</p>
+                <p>Just like IP Rotation, the ability to send SMS and USSD commands relies entirely on **ModemManager (`mmcli`)** and a compatible "Stick Mode" modem. This is because `mmcli` provides the specific commands (`--messaging-create-sms`, `--3gpp-ussd-initiate`) to interact with the modem's cellular functions.</p>
+                <p>If you are using a HiLink/Ethernet modem, these cellular functions are not exposed to the operating system, so this feature will be disabled.</p>
               </AccordionContent>
             </AccordionItem>
              <AccordionItem value="item-5">

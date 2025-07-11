@@ -230,11 +230,8 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
             f"allow {username}"
         ])
     else:
-        # For open proxies, allow any local connection
         lines.append("auth none")
     
-    # -n flag disables NTLM authentication, which is generally safer
-    # -a flag allows anonymous connections (only used when auth is none)
     proxy_flags = "-n"
     if not is_authenticated:
         proxy_flags += " -a"
@@ -283,8 +280,6 @@ def is_command_available(command):
 
 def get_proxy_status(interface_name: str) -> str:
     """Checks if the 3proxy service for a specific interface is active."""
-    # This command is expected to fail if the service is not active.
-    # We suppress the exception and check the output.
     try:
         result = run_command(
             ['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], 
@@ -296,7 +291,6 @@ def get_proxy_status(interface_name: str) -> str:
         else:
             return 'stopped'
     except Exception:
-        # If any other exception occurs (e.g., pkexec fails), assume stopped.
         return 'stopped'
 
 
@@ -304,7 +298,6 @@ def get_public_ip(interface_name: str) -> Optional[str]:
     """Gets the public IP address for a specific network interface."""
     if not is_command_available("curl"): return None
     try:
-        # Add a longer timeout for curl
         return run_command(['curl', '--interface', interface_name, '--connect-timeout', '10', 'https://api.ipify.org'], timeout=20)
     except Exception:
         return None
@@ -356,22 +349,20 @@ def get_all_modem_statuses() -> Dict:
                     if ifname and ifname in all_modems:
                         all_modems[ifname]['id'] = details.get('modem', {}).get('generic', {}).get('device-identifier', ifname)
                         all_modems[ifname]['name'] = details.get('modem',{}).get('device-properties',{}).get('device.product', f"Modem ({ifname})")
-                        all_modem_statuses[ifname]['source'] = "mmcli_enhanced"
+                        all_modems[ifname]['source'] = "mmcli_enhanced"
             except Exception as e:
-                log_message("WARN", f"Could not enhance with mmcli data: {e}")
+                log_message("WARN", f"Could not enhance with mmcli data: {e}. Is ModemManager running?")
 
         status_list = list(all_modems.values())
         proxy_configs = read_state_file(CONFIG['PROXY_CONFIGS_FILE'])
         configs_changed = False
         
         for modem in status_list:
-            # We need to pass the full dict to modify it
             cfg, created = get_or_create_proxy_config(modem['interfaceName'], proxy_configs)
             if created:
                 proxy_configs[modem['interfaceName']] = cfg
                 configs_changed = True
             
-            # Ensure the config on the modem object is the most up-to-date one
             modem['proxyConfig'] = proxy_configs.get(modem['interfaceName'])
             if modem['proxyConfig'] and modem['proxyConfig'].get('customName'):
                  modem['name'] = modem['proxyConfig']['customName']
@@ -379,7 +370,7 @@ def get_all_modem_statuses() -> Dict:
             if modem['status'] == 'connected' and modem['ipAddress']:
                 modem['publicIpAddress'] = get_public_ip(modem['interfaceName'])
                 modem['proxyStatus'] = get_proxy_status(modem['interfaceName'])
-                if modem['proxyStatus'] == 'stopped': # Only write if stopped to avoid race conditions
+                if modem['proxyStatus'] == 'stopped':
                     write_3proxy_config_file(modem['interfaceName'], modem['ipAddress'])
             else:
                 modem['publicIpAddress'] = None
@@ -445,7 +436,6 @@ def rotate_ip(interface_name: str) -> Dict:
             
         new_ip = new_status['ipAddress']
         log_message("INFO", f"IP rotation for {interface_name} successful. New IP: {new_ip}")
-        # Automatically restart proxy to bind to the new IP if it was running
         if new_status.get('proxyStatus') == 'running':
             log_message("INFO", f"Proxy for {interface_name} was running, restarting it to apply new IP.")
             proxy_action('restart', interface_name)
@@ -472,7 +462,6 @@ def update_proxy_config(interface_name: str, config_update: Dict) -> Dict:
 
         write_state_file(CONFIG['PROXY_CONFIGS_FILE'], all_configs)
         
-        # Check current status before restarting
         current_status = get_proxy_status(interface_name)
         if current_status == 'running':
             log_message("INFO", f"Restarting proxy for {interface_name} to apply config changes.")
@@ -481,7 +470,6 @@ def update_proxy_config(interface_name: str, config_update: Dict) -> Dict:
                 raise Exception(f"Config updated, but failed to restart proxy: {restart_result.get('error')}")
             return {"success": True, "message": "Configuration updated and proxy restarted."}
         else:
-            # If proxy is stopped, just update the config file
             all_statuses = get_all_modem_statuses()
             modem_info = next((m for m in all_statuses.get('data', []) if m['interfaceName'] == interface_name), None)
             if modem_info and modem_info.get('ipAddress'):
@@ -503,7 +491,7 @@ def get_vnstat_interfaces() -> Dict:
         return {"success": True, "data": interfaces}
     except Exception as e:
         log_message("WARN", f"Could not get vnstat interfaces: {e}. Is vnstat running and has data?")
-        return {"success": True, "data": []} # Return empty list on failure, not an error
+        return {"success": True, "data": []}
 
 def get_vnstat_stats(interface_name: str) -> Dict:
     """Gets all traffic stats for a specific interface from vnstat."""
@@ -738,32 +726,27 @@ def main():
     result = {}
     
     try:
-        log_message("DEBUG", f"Backend action '{action}' called.")
+        log_message("DEBUG", f"Backend action '{action}' called with args: {args}")
         
         action_map = {
-            'get_all_modem_statuses': lambda: get_all_modem_statuses(),
+            'get_all_modem_statuses': get_all_modem_statuses,
             'start_proxy': lambda: proxy_action('start', args[0]),
             'stop_proxy': lambda: proxy_action('stop', args[0]),
             'restart_proxy': lambda: proxy_action('restart', args[0]),
             'rotate_ip': lambda: rotate_ip(args[0]),
-            'get_all_configs': lambda: get_all_configs(),
+            'get_all_configs': get_all_configs,
             'update_proxy_config': lambda: update_proxy_config(args[0], json.loads(args[1])),
-            'get_vnstat_interfaces': lambda: get_vnstat_interfaces(),
+            'get_vnstat_interfaces': get_vnstat_interfaces,
             'get_vnstat_stats': lambda: get_vnstat_stats(args[0]),
             'send_sms': lambda: send_sms(args[0], json.loads(args[1])),
             'read_sms': lambda: read_sms(args[0]),
             'send_ussd': lambda: send_ussd(args[0], json.loads(args[1])),
-            'get_logs': lambda: get_logs(),
-            'get_available_cloudflare_tunnels': lambda: get_available_cloudflare_tunnels(),
-            'get_all_tunnel_statuses': lambda: get_all_tunnel_statuses(),
+            'get_logs': get_logs,
+            'get_available_cloudflare_tunnels': get_available_cloudflare_tunnels,
+            'get_all_tunnel_statuses': get_all_tunnel_statuses,
             'start_tunnel': lambda: start_tunnel(args[0], int(args[1]), args[2], args[3], args[4] if len(args) > 4 else None),
             'stop_tunnel': lambda: stop_tunnel(args[0]),
         }
-
-        # Simplified action names from frontend
-        if action == "start": action = "start_proxy"
-        if action == "stop": action = "stop_proxy"
-        if action == "restart": action = "restart_proxy"
 
         if action in action_map:
             result = action_map[action]()
@@ -778,5 +761,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    

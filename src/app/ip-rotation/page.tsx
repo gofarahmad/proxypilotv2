@@ -35,7 +35,6 @@ export default function IpRotationPage() {
     try {
       const modemData = await getAllModemStatuses();
       setModems(prevModems => {
-        // Preserve auto-rotate settings from previous state
         const settingsMap = new Map(prevModems.map(m => [m.interfaceName, { autoRotateEnabled: m.autoRotateEnabled, autoRotateIntervalMinutes: m.autoRotateIntervalMinutes }]));
         return modemData.map(newModem => ({
           ...newModem,
@@ -53,7 +52,6 @@ export default function IpRotationPage() {
 
   useEffect(() => {
     fetchModemsData();
-    // Cleanup timers on unmount
     return () => {
       Object.values(modemTimersRef.current).forEach(timers => {
         if (timers.rotationTimer) clearInterval(timers.rotationTimer);
@@ -76,8 +74,6 @@ export default function IpRotationPage() {
       
       setModems(prev => {
         const modemInState = prev.find(m => m.interfaceName === interfaceName);
-        // This part needs to access the latest state, which can be tricky in closures.
-        // We'll reset the countdown via the main `useEffect` for modems.
         return prev.map(m => 
             m.interfaceName === interfaceName 
             ? { ...m, ipAddress: newIp, status: 'connected', lastRotated: new Date(), rotating: false } 
@@ -124,7 +120,6 @@ export default function IpRotationPage() {
     modems.forEach((modem) => {
       const timerKey = modem.interfaceName;
 
-      // Clear existing timers for this modem before re-evaluating
       if (modemTimersRef.current[timerKey]) {
         clearInterval(modemTimersRef.current[timerKey].rotationTimer);
         clearInterval(modemTimersRef.current[timerKey].countdownTimer);
@@ -134,7 +129,6 @@ export default function IpRotationPage() {
       if (modem.autoRotateEnabled && modem.autoRotateIntervalMinutes > 0 && modem.status === 'connected' && modem.source === 'mmcli_enhanced') {
         const intervalMs = modem.autoRotateIntervalMinutes * 60 * 1000;
         
-        // Initialize countdown if it's not set
         if (modemAutoRotateCountdowns[timerKey] === undefined) {
              setModemAutoRotateCountdowns(prev => ({ ...prev, [timerKey]: intervalMs / 1000 }));
         }
@@ -144,7 +138,7 @@ export default function IpRotationPage() {
         const countdownTimer = setInterval(() => {
           setModemAutoRotateCountdowns(prev => {
             const currentCountdown = prev[timerKey] || 0;
-            if (currentCountdown <= 1) { // When it hits 0, reset based on modem state
+            if (currentCountdown <= 1) {
                  const currentModem = modems.find(m => m.interfaceName === timerKey);
                  return { ...prev, [timerKey]: (currentModem?.autoRotateIntervalMinutes || 0) * 60 };
             }
@@ -154,7 +148,6 @@ export default function IpRotationPage() {
 
         modemTimersRef.current[timerKey] = { rotationTimer, countdownTimer };
       } else {
-        // If auto-rotate is disabled, clear the countdown from state
          if(modemAutoRotateCountdowns[timerKey] !== undefined){
             setModemAutoRotateCountdowns(prev => {
                 const newState = {...prev};
@@ -165,7 +158,6 @@ export default function IpRotationPage() {
       }
     });
 
-    // Cleanup function for useEffect
     return () => {
         Object.values(modemTimersRef.current).forEach(timers => {
             if(timers.rotationTimer) clearInterval(timers.rotationTimer);
@@ -254,7 +246,7 @@ export default function IpRotationPage() {
                 {!isRotationSupported(modem) && (
                   <div className="p-2 text-xs text-center bg-yellow-400/20 text-yellow-700 rounded-md flex items-center gap-2">
                     <AlertTriangle className="h-4 w-4 shrink-0" />
-                    IP Rotation requires the modem to be managed by ModemManager.
+                    <span className='text-left'>IP Rotation is not supported for this type of modem (e.g. HiLink/Ethernet mode). It requires a modem managed by ModemManager.</span>
                   </div>
                 )}
                 
