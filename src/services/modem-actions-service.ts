@@ -14,8 +14,9 @@ async function runPythonScript(args: string[]): Promise<any> {
 
   try {
     const results = await PythonShell.run('backend_controller.py', options);
-    // The result from Python is a JSON string in the first element of the array.
-    const result = JSON.parse(results[0]); 
+    // Join all lines of output, in case the JSON is fragmented.
+    const rawResult = results.join('');
+    const result = JSON.parse(rawResult);
     if (!result.success) {
       // If the script reported an error, throw it so it can be caught by the caller.
       throw new Error(result.error || 'The Python script reported an unkown execution error.');

@@ -15,7 +15,9 @@ async function runPythonScript(args: string[]): Promise<any> {
 
   try {
     const results = await PythonShell.run('backend_controller.py', options);
-    const result = JSON.parse(results[0]);
+    // Join all lines of output, in case the JSON is fragmented.
+    const rawResult = results.join('');
+    const result = JSON.parse(rawResult);
     if (!result.success) {
       throw new Error(result.error || 'The Python script reported an unknown execution error.');
     }
@@ -101,5 +103,3 @@ export async function stopTunnel(tunnelId: string): Promise<boolean> {
   await runPythonScript(['stop_tunnel', tunnelId]);
   return true;
 }
-
-    
