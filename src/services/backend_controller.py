@@ -14,6 +14,7 @@ import time
 from typing import Dict, List, Optional, Any, Tuple
 import requests
 from lxml import html
+import ipaddress
 
 # --- Configuration ---
 CONFIG = {
@@ -27,7 +28,6 @@ CONFIG = {
     'SOCKS_PORT_RANGE_START': 8001,
     'SOCKS_PORT_RANGE_END': 9000,
     'DEFAULT_TIMEOUT': 15,
-    'HILINK_GATEWAY': "192.168.8.1"
 }
 
 # --- Initialization ---
@@ -90,7 +90,7 @@ def write_state_file(file_path: Path, data: Any) -> bool:
 
 # --- HiLink Web UI Client ---
 class HiLinkClient:
-    def __init__(self, gateway=CONFIG['HILINK_GATEWAY']):
+    def __init__(self, gateway: str):
         self.base_url = f"http://{gateway}"
         self.session = requests.Session()
 
@@ -100,7 +100,7 @@ class HiLinkClient:
             response.raise_for_status()
             return html.fromstring(response.content)
         except requests.RequestException as e:
-            log_message("ERROR", f"Failed to get HiLink page {path}: {e}")
+            log_message("ERROR", f"Failed to get HiLink page {path} from {self.base_url}: {e}")
             raise Exception(f"Could not connect to modem at {self.base_url}. Is it connected and on the correct IP?")
 
     def get_info(self):
@@ -123,7 +123,7 @@ class HiLinkClient:
             "rsrq": get_text(antennapointing_tree, '//*[@id="signal_table_value_3"]'),
         }
         return info
-        
+
 # --- Command Execution & Port Management (for 3proxy) ---
 def run_command(command_list: List[str], timeout: Optional[int] = None, check: bool = True, suppress_error: bool = False) -> str:
     if timeout is None: timeout = CONFIG['DEFAULT_TIMEOUT']
@@ -132,20 +132,28 @@ def run_command(command_list: List[str], timeout: Optional[int] = None, check: b
         return result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
         error_output = e.stderr.strip() if hasattr(e, 'stderr') and e.stderr else "No error output."
-        if suppress_error: return error_output
-        raise Exception(f"Command failed: {command_list[0]}. Error: {error_output}")
+        if not suppress_error:
+            raise Exception(f"Command failed: {command_list[0]}. Error: {error_output}")
+        return error_output
+    except Exception as e:
+        if not suppress_error:
+            raise Exception(f"An unexpected error occurred running command: {command_list[0]}. Error: {e}")
+        return str(e)
 
 def get_proxy_status(interface_name: str) -> str:
     try:
-        result = run_command(['pkexec', 'systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], check=False, suppress_error=True)
-        return 'running' if result == 'active' else 'stopped'
-    except Exception: return 'stopped'
+        # We need pkexec to run systemctl as root.
+        result = run_command(['pkexec', 'systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], suppress_error=True)
+        return 'running' if 'active' in result else 'stopped'
+    except Exception as e:
+        log_message("ERROR", f"Failed to get proxy status for {interface_name}: {e}")
+        return 'error'
 
 def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[Dict, bool]:
     if interface_name in all_configs: return all_configs[interface_name], False
     
-    used_http_ports = {c.get('httpPort') for c in all_configs.values()}
-    used_socks_ports = {c.get('socksPort') for c in all_configs.values()}
+    used_http_ports = {c.get('httpPort') for c in all_configs.values() if c.get('httpPort')}
+    used_socks_ports = {c.get('socksPort') for c in all_configs.values() if c.get('socksPort')}
 
     http_port = next((p for p in range(CONFIG['HTTP_PORT_RANGE_START'], CONFIG['HTTP_PORT_RANGE_END']) if p not in used_http_ports), None)
     socks_port = next((p for p in range(CONFIG['SOCKS_PORT_RANGE_START'], CONFIG['SOCKS_PORT_RANGE_END']) if p not in used_socks_ports), None)
@@ -157,7 +165,6 @@ def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[
     return new_config, True
 
 def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str]:
-    # This function remains largely the same, as it's about 3proxy's format
     if not egress_ip or not config.get('httpPort') or not config.get('socksPort'): return None
     
     username, password = config.get('username'), config.get('password')
@@ -206,63 +213,110 @@ def get_primary_lan_ip() -> Optional[str]:
                         return addr_info.get('local')
         return None
     except Exception: return None
+    
+def discover_hilink_gateways() -> List[Tuple[str, str]]:
+    """
+    Discovers HiLink modem gateways by inspecting network interfaces.
+    Returns a list of tuples, where each tuple is (interface_name, gateway_ip).
+    """
+    gateways = []
+    try:
+        ip_info = json.loads(run_command(['ip', '-j', 'addr']))
+        for iface in ip_info:
+            ifname = iface.get('ifname', '')
+            # HiLink modems usually appear as 'enx...' or 'usb...'
+            if iface.get('operstate') == 'UP' and (ifname.startswith('enx') or ifname.startswith('usb')):
+                for addr_info in iface.get('addr_info', []):
+                    if addr_info.get('family') == 'inet':
+                        # Example: Server IP is 192.168.8.100, prefix is 24
+                        # We derive the gateway is 192.168.8.1
+                        server_ip = addr_info.get('local')
+                        prefixlen = addr_info.get('prefixlen')
+                        if server_ip and prefixlen:
+                            try:
+                                network = ipaddress.IPv4Interface(f"{server_ip}/{prefixlen}").network
+                                # The gateway is typically the first usable IP in the subnet
+                                gateway_ip = str(network[1])
+                                gateways.append((ifname, gateway_ip))
+                                log_message("DEBUG", f"Discovered potential HiLink gateway {gateway_ip} on interface {ifname}")
+                            except ValueError as e:
+                                log_message("WARN", f"Could not determine network for {server_ip}/{prefixlen}: {e}")
+    except Exception as e:
+        log_message("ERROR", f"Failed to discover HiLink gateways: {e}")
+    return gateways
 
 # --- Core Logic ---
 def get_all_modem_statuses() -> Dict:
-    try:
-        hilink_client = HiLinkClient()
-        hilink_info = hilink_client.get_info()
-        
-        # We need a stable interface name. For HiLink, the gateway IP is the key.
-        interface_name = f"hilink_{CONFIG['HILINK_GATEWAY'].replace('.', '_')}"
-        
-        # We still need the IP address from the server's perspective
-        ip_info = json.loads(run_command(['ip', '-j', 'addr']))
-        modem_ip = None
-        for iface in ip_info:
-            if iface.get('operstate') == 'UP' and any(addr.get('address', '').startswith('192.168.8.') for addr in iface.get('addr_info', [])):
-                 modem_ip = next((addr.get('local') for addr in iface.get('addr_info', []) if addr.get('family') == 'inet'), None)
-                 break
-        
-        modem_status = 'connected' if hilink_info['connection_status'].lower() == 'connected' else 'disconnected'
-        
-        proxy_configs = read_state_file(CONFIG['PROXY_CONFIGS_FILE'])
-        cfg, created = get_or_create_proxy_config(interface_name, proxy_configs)
-        if created:
-            proxy_configs[interface_name] = cfg
-            write_state_file(CONFIG['PROXY_CONFIGS_FILE'], proxy_configs)
-        
-        proxy_status = get_proxy_status(interface_name)
-        if modem_status == 'connected' and modem_ip and proxy_status == 'stopped':
-             write_3proxy_config_file(interface_name, modem_ip)
+    all_modems_data = []
+    proxy_configs = read_state_file(CONFIG['PROXY_CONFIGS_FILE'])
+    
+    discovered_gateways = discover_hilink_gateways()
 
-        # Structure the data similarly to the old format for frontend compatibility
-        modem_data = {
-            "id": hilink_info.get("imei", interface_name),
-            "name": hilink_info.get("name", "HiLink Modem"),
-            "interfaceName": interface_name,
-            "status": modem_status,
-            "ipAddress": modem_ip,
-            "publicIpAddress": "N/A", # HiLink doesn't easily expose this to the OS
-            "proxyStatus": proxy_status,
-            "source": "hilink_webui",
-            "proxyConfig": cfg,
-            "serverLanIp": get_primary_lan_ip(),
-            "details": { # Add all the rich details here
-                "operator": hilink_info.get("operator"),
-                "network_mode": hilink_info.get("network_mode"),
-                "rssi": hilink_info.get("rssi"),
-                "rsrp": hilink_info.get("rsrp"),
-                "sinr": hilink_info.get("sinr"),
-                "rsrq": hilink_info.get("rsrq"),
-                "imei": hilink_info.get("imei"),
+    if not discovered_gateways:
+        log_message("INFO", "No HiLink gateways discovered. If you have a modem connected, check its network interface state.")
+        return {"success": True, "data": []}
+
+    for ifname, gateway_ip in discovered_gateways:
+        try:
+            hilink_client = HiLinkClient(gateway=gateway_ip)
+            hilink_info = hilink_client.get_info()
+            
+            # The interface name for HiLink is based on the gateway to ensure stability
+            interface_name = f"hilink_{gateway_ip.replace('.', '_')}"
+            
+            modem_ip = next((addr['local'] for iface in json.loads(run_command(['ip', '-j', 'addr'])) if iface['ifname'] == ifname for addr in iface['addr_info'] if addr['family'] == 'inet'), None)
+            
+            modem_status = 'connected' if hilink_info.get('connection_status', '').lower() == 'connected' else 'disconnected'
+            
+            cfg, created = get_or_create_proxy_config(interface_name, proxy_configs)
+            if created:
+                proxy_configs[interface_name] = cfg
+                write_state_file(CONFIG['PROXY_CONFIGS_FILE'], proxy_configs)
+            
+            proxy_status = get_proxy_status(interface_name)
+            if modem_status == 'connected' and modem_ip and proxy_status == 'stopped':
+                 write_3proxy_config_file(interface_name, modem_ip)
+
+            modem_data = {
+                "id": hilink_info.get("imei", interface_name),
+                "name": cfg.get('customName') or hilink_info.get("name", f"HiLink Modem {gateway_ip}"),
+                "interfaceName": interface_name,
+                "status": modem_status,
+                "ipAddress": modem_ip,
+                "publicIpAddress": "N/A",
+                "proxyStatus": proxy_status,
+                "source": "hilink_webui",
+                "proxyConfig": cfg,
+                "serverLanIp": get_primary_lan_ip(),
+                "details": {
+                    "operator": hilink_info.get("operator"),
+                    "network_mode": hilink_info.get("network_mode"),
+                    "rssi": hilink_info.get("rssi"),
+                    "rsrp": hilink_info.get("rsrp"),
+                    "sinr": hilink_info.get("sinr"),
+                    "rsrq": hilink_info.get("rsrq"),
+                    "imei": hilink_info.get("imei"),
+                }
             }
-        }
-        
-        return {"success": True, "data": [modem_data]}
-    except Exception as e:
-        log_message("ERROR", f"Critical error in get_all_modem_statuses: {e}")
-        return {"success": False, "error": str(e)}
+            all_modems_data.append(modem_data)
+        except Exception as e:
+            log_message("ERROR", f"Could not get status for modem at {gateway_ip}: {e}")
+            # Add a placeholder so the user knows we tried
+            all_modems_data.append({
+                "id": f"error_{gateway_ip}",
+                "name": f"Modem at {gateway_ip}",
+                "interfaceName": f"error_{gateway_ip.replace('.', '_')}",
+                "status": "error",
+                "ipAddress": gateway_ip,
+                "publicIpAddress": None,
+                "proxyStatus": "error",
+                "source": "hilink_webui",
+                "proxyConfig": None,
+                "serverLanIp": get_primary_lan_ip(),
+                "details": {"error": str(e)}
+            })
+
+    return {"success": True, "data": all_modems_data}
 
 # --- Action Dispatcher ---
 def main():
@@ -272,16 +326,16 @@ def main():
         sys.exit(1)
 
     action = sys.argv[1]
-    # args = sys.argv[2:]
+    args = sys.argv[2:]
     result = {}
     
     try:
-        log_message("DEBUG", f"Backend action '{action}' called.")
+        log_message("DEBUG", f"Backend action '{action}' called with args: {args}")
         
         if action == 'get_all_modem_statuses':
             result = get_all_modem_statuses()
         else:
-             result = {"success": False, "error": f"Action '{action}' is not yet implemented for HiLink modems."}
+            result = {"success": False, "error": f"Action '{action}' is not yet implemented for HiLink modems."}
             
     except Exception as e:
         log_message("ERROR", f"Unhandled error executing action '{action}': {e}")
