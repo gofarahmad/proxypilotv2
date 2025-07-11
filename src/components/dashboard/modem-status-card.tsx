@@ -5,7 +5,7 @@ import type { ModemStatus } from '@/services/network-service';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Wifi, WifiOff, AlertCircle, RefreshCw, Loader2, Pencil, Power, Globe } from 'lucide-react';
+import { Wifi, WifiOff, AlertCircle, RefreshCw, Loader2, Pencil, Power, Globe, Signal, Tag, Shield, BarChart } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { getModemStatus as fetchModemStatus } from '@/services/network-service';
@@ -60,7 +60,7 @@ export function ModemStatusCard({ initialModem, onNameUpdate }: ModemStatusCardP
     setIsEditingName(false);
   };
   
-  if (!modem) return <Skeleton className="h-[280px] w-full" />;
+  if (!modem) return <Skeleton className="h-[420px] w-full" />;
 
   const isConnected = modem.status === 'connected';
   const Icon = isConnected ? Wifi : modem.status === 'disconnected' ? WifiOff : AlertCircle;
@@ -107,12 +107,20 @@ export function ModemStatusCard({ initialModem, onNameUpdate }: ModemStatusCardP
               </Badge>
             </div>
              <div className="flex items-center justify-between">
-              <span className="text-sm font-medium flex items-center gap-1"><Globe className="h-4 w-4 text-blue-500"/> Public IP:</span>
-              <span className="text-sm font-mono font-bold">{modem.publicIpAddress || 'Checking...'}</span>
+              <span className="text-sm font-medium flex items-center gap-1"><Tag className="h-4 w-4 text-blue-500"/> Operator:</span>
+              <span className="text-sm font-semibold">{modem.details?.operator || 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Local IP:</span>
-              <span className="text-sm font-mono">{modem.ipAddress || 'N/A'}</span>
+              <span className="text-sm font-medium flex items-center gap-1"><Shield className="h-4 w-4 text-gray-500"/> IMEI:</span>
+              <span className="text-sm font-mono">{modem.details?.imei || 'N/A'}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium flex items-center gap-1"><Signal className="h-4 w-4 text-orange-500"/> RSSI:</span>
+              <span className="text-sm font-mono">{modem.details?.rssi || 'N/A'}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium flex items-center gap-1"><BarChart className="h-4 w-4 text-purple-500"/> RSRP/SINR:</span>
+              <span className="text-sm font-mono">{modem.details?.rsrp || 'N/A'} / {modem.details?.sinr || 'N/A'}</span>
             </div>
             <div className="flex items-center justify-between pt-2">
               <span className="text-sm font-medium">Proxy Status:</span>

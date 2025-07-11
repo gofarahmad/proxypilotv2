@@ -50,7 +50,8 @@ export interface SmsMessage {
  */
 export async function sendSms(interfaceName: string, recipient: string, message: string): Promise<{ success: boolean; message: string }> {
     const args = { recipient, message };
-    const data = await runPythonScript(['send-sms', interfaceName, JSON.stringify(args)]);
+    // Updated action name
+    const data = await runPythonScript(['send_sms', interfaceName, JSON.stringify(args)]);
     return { success: true, message: data.message };
 }
 
@@ -60,7 +61,8 @@ export async function sendSms(interfaceName: string, recipient: string, message:
  * @returns A promise that resolves to an array of SMS messages.
  */
 export async function readSms(interfaceName: string): Promise<SmsMessage[]> {
-    const data = await runPythonScript(['read-sms', interfaceName]);
+     // Updated action name
+    const data = await runPythonScript(['read_sms', interfaceName]);
     return data;
 }
 
@@ -72,8 +74,9 @@ export async function readSms(interfaceName: string): Promise<SmsMessage[]> {
  */
 export async function sendUssd(interfaceName: string, ussdCode: string): Promise<{ success: boolean; response: string }> {
     const args = { ussdCode };
-    const data = await runPythonScript(['send-ussd', interfaceName, JSON.stringify(args)]);
+     // Updated action name
+    const data = await runPythonScript(['send_ussd', interfaceName, JSON.stringify(args)]);
     return { success: true, response: data.response };
 }
 
-      
+    

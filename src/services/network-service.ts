@@ -31,6 +31,16 @@ async function runPythonScript(args: string[]): Promise<any> {
   }
 }
 
+export interface ModemDetails {
+  operator?: string;
+  network_mode?: string;
+  rssi?: string;
+  rsrp?: string;
+  sinr?: string;
+  rsrq?: string;
+  imei?: string;
+}
+
 export interface ModemStatus {
   id: string;
   name: string;
@@ -39,9 +49,10 @@ export interface ModemStatus {
   ipAddress: string | null;
   publicIpAddress: string | null;
   proxyStatus: 'running' | 'stopped' | 'error';
-  source: 'ip_addr' | 'mmcli_enhanced';
+  source: 'ip_addr' | 'mmcli_enhanced' | 'hilink_webui';
   proxyConfig?: ProxyConfig | null; 
   serverLanIp?: string | null;
+  details?: ModemDetails;
 }
 
 
