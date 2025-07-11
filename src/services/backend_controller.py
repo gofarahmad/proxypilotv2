@@ -193,14 +193,12 @@ def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[
     used_http_ports = {c.get('httpPort') for c in all_configs.values() if c.get('httpPort')}
     used_socks_ports = {c.get('socksPort') for c in all_configs.values() if c.get('socksPort')}
     
-    # Find available HTTP port independently
     http_port = CONFIG['HTTP_PORT_RANGE_START']
     while http_port in used_http_ports:
         http_port += 1
         if http_port > CONFIG['HTTP_PORT_RANGE_END']:
             raise Exception("No available HTTP ports in the specified range.")
 
-    # Find available SOCKS port independently
     socks_port = CONFIG['SOCKS_PORT_RANGE_START']
     while socks_port in used_socks_ports:
         socks_port += 1
@@ -265,7 +263,6 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
     
     return "\n".join(lines)
 
-
 def write_3proxy_config_file(interface_name: str, egress_ip: str) -> Optional[str]:
     """Writes a 3proxy configuration file for a given modem interface."""
     try:
@@ -308,7 +305,6 @@ def get_proxy_status(interface_name: str) -> str:
         return 'running'
     else:
         return 'stopped'
-
 
 def get_public_ip(interface_name: str) -> Optional[str]:
     """Gets the public IP address for a specific network interface."""
