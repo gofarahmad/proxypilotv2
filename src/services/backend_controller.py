@@ -189,13 +189,13 @@ def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[
     
     new_config = {
         "httpPort": http_port,
-        "socksPort": http_port, # SOCKS will use the same port number for simplicity in this model
+        "socksPort": http_port + 1000, 
         "username": f"user_{secrets.token_hex(2)}",
         "password": secrets.token_hex(8),
         "customName": None
     }
     
-    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP/SOCKS Port:{new_config['httpPort']}")
+    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP Port:{new_config['httpPort']} / SOCKS Port:{new_config['socksPort']}")
     return new_config, True
 
 # --- 3Proxy Config File Generation ---
@@ -207,8 +207,7 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
     username = config.get('username')
     password = config.get('password')
     http_port = config['httpPort']
-    # SOCKS port now uses a different range for clarity as per previous discussion
-    socks_port = http_port + 1000 
+    socks_port = config['socksPort']
     listening_ip = "0.0.0.0"
 
     lines = [
@@ -232,10 +231,12 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
         lines.append("auth none")
 
     proxy_flags = "-n"
-    socks_flags = "" # socks does not have the -n flag
-
     if not is_authenticated:
         proxy_flags += " -a"
+
+    # For socks, we don't need -n, but we do need -a for anonymous
+    socks_flags = ""
+    if not is_authenticated:
         socks_flags += " -a"
 
     lines.extend([
@@ -279,11 +280,9 @@ def is_command_available(command):
 def get_proxy_status(interface_name: str) -> str:
     """Checks if the 3proxy service for a specific interface is active."""
     try:
-        # Use check=True. If the command fails (i.e., service is not active), it raises CalledProcessError.
         run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], check=True)
         return 'running'
     except Exception:
-        # Any exception means it's not running or there's an issue.
         return 'stopped'
 
 
@@ -752,4 +751,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-    
