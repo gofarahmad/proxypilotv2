@@ -44,7 +44,13 @@ def run_command(command_list, timeout=15):
     try:
         # Determine if the command requires elevated privileges
         privileged_commands = ['systemctl', 'mmcli', 'cloudflared']
-        if command_list[0] in privileged_commands:
+        cmd_to_check = command_list[0]
+        
+        # If pkexec is used, the actual command is the second element
+        if cmd_to_check == 'pkexec' and len(command_list) > 1:
+            cmd_to_check = command_list[1]
+
+        if cmd_to_check in privileged_commands and command_list[0] != 'pkexec':
              # Use pkexec for reliable privilege escalation from web server environment
              command_list.insert(0, 'pkexec')
 
@@ -136,25 +142,46 @@ def get_or_create_proxy_config(interface_name, all_configs):
 def generate_3proxy_config_content(config, egress_ip):
     if not egress_ip or not config.get('httpPort') or not config.get('socksPort'):
         return None
-    
+
     http_port = config['httpPort']
     socks_port = config['socksPort']
-    is_authenticated = config.get('username') and config.get('password')
-    
-    auth_lines = ""
+    username = config.get('username')
+    password = config.get('password')
+    is_authenticated = username and password
+
+    # Base config lines
+    lines = [
+        "daemon",
+        "nserver 8.8.8.8",
+        "nserver 8.8.4.4",
+        "nscache 65536",
+        "timeouts 1 5 30 60 180 1800 15 60"
+    ]
+
+    # Authentication block
     if is_authenticated:
-        auth_lines = f"users {config['username']}:CL:{config['password']}\nallow {config['username']}"
+        lines.append(f"users {username}:CL:{password}")
+        lines.append("auth strong")
+        lines.append(f"allow {username}")
+    else:
+        # If not authenticated, allow all
+        lines.append("auth none")
+
+    # Proxy services
+    http_command = f"proxy -p{http_port} -i0.0.0.0 -e{egress_ip}"
+    socks_command = f"socks -p{socks_port} -i0.0.0.0 -e{egress_ip}"
     
-    # Listen on all interfaces (0.0.0.0), send traffic out through the modem's IP (-e)
-    return f"""daemon
-nserver 8.8.8.8
-nserver 8.8.4.4
-nscache 65536
-timeouts 1 5 30 60 180 1800 15 60
-{auth_lines}
-proxy -p{http_port} -i0.0.0.0 -e{egress_ip}
-socks -p{socks_port} -i0.0.0.0 -e{egress_ip}
-"""
+    if not is_authenticated:
+        # Add -a for anonymous if no auth is set
+        http_command += " -a"
+        socks_command += " -a"
+
+    lines.append(http_command)
+    lines.append(socks_command)
+    lines.append("flush")
+    
+    return "\n".join(lines)
+
 
 def write_3proxy_config_file(interface_name, egress_ip):
     try:
@@ -718,3 +745,6 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+    
