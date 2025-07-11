@@ -86,9 +86,9 @@ node -v
 npm -v
 ```
 
-### Langkah 3: Konfigurasi 3proxy & Izin
+### Langkah 3: Konfigurasi 3proxy & Izin (PENTING!)
 
-Aplikasi ini perlu menulis file konfigurasi untuk 3proxy. Kita perlu membuat direktori dan mengatur izin.
+Aplikasi ini perlu menulis file konfigurasi untuk 3proxy, dan layanan `systemd` (yang berjalan sebagai root) perlu membacanya. Langkah ini penting untuk mencegah error.
 
 ```bash
 # Buat direktori untuk file konfigurasi 3proxy dinamis kita
@@ -98,6 +98,11 @@ sudo mkdir -p /etc/3proxy/conf
 # Jalankan `whoami` untuk melihat username Anda.
 # Ini memberikan kepemilikan kepada pengguna yang akan menjalankan aplikasi.
 sudo chown -R $(whoami):$(whoami) /etc/3proxy
+
+# **PERINTAH PENTING:** Atur izin agar semua orang bisa membaca/masuk ke direktori,
+# tetapi hanya pemilik yang bisa menulis. Ini memungkinkan layanan systemd (root)
+# untuk membaca file konfigurasi yang dibuat oleh aplikasi.
+sudo chmod -R 755 /etc/3proxy
 ```
 
 ### Langkah 4: Membuat Layanan 3proxy Dinamis (`systemd`)
