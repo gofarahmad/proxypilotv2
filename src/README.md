@@ -30,6 +30,7 @@ Aplikasi ini bergantung pada beberapa perangkat lunak sistem kunci untuk berfung
 - **`git`:** Untuk mengunduh (clone) kode proyek ini ke server Anda.
 - **`Netplan`:** Utilitas konfigurasi jaringan default Ubuntu (biasanya sudah terinstal).
 - **`ModemManager` & `usb-modeswitch` (Opsional tapi Direkomendasikan):** Layanan sistem Linux yang dibutuhkan untuk fitur-fitur lanjutan seperti rotasi IP, kirim SMS, dan USSD. Deteksi modem dasar akan tetap berfungsi tanpanya.
+- **`policykit-1` (PENTING):** Diperlukan agar aplikasi web dapat menjalankan perintah sistem (seperti `systemctl`) dengan aman.
 - **`nginx` (Opsional tapi Direkomendasikan):** Diperlukan jika Anda ingin mengakses aplikasi tanpa nomor port.
 - **`cloudflared` (Opsional):** Diperlukan jika Anda ingin menggunakan fitur Cloudflare Tunnel.
 - **`curl`:** Diperlukan untuk mengambil IP publik.
@@ -61,8 +62,9 @@ sudo apt update && sudo apt upgrade -y
 # git: Untuk mengkloning repositori
 # nginx: Untuk reverse proxy (opsional)
 # modemmanager & usb-modeswitch: Opsional untuk fitur lanjutan tapi sangat direkomendasikan
+# policykit-1: Penting agar UI web dapat berkomunikasi dengan layanan sistem
 # curl: Diperlukan untuk mengambil IP publik
-sudo apt install -y 3proxy python3 python3-pip git nginx modemmanager usb-modeswitch curl
+sudo apt install -y 3proxy python3 python3-pip git nginx modemmanager usb-modeswitch policykit-1 curl
 ```
 
 ### Langkah 2: Instalasi Node.js
@@ -320,5 +322,3 @@ Fitur ini memungkinkan Anda mengekspos proxy lokal Anda ke internet menggunakan 
     *   Pilih tunnel tersebut, pilih proxy lokal yang ingin Anda hubungkan, dan klik "Create Tunnel".
 
 Sistem sekarang akan menghubungkan proxy lokal Anda ke domain kustom Anda melalui Cloudflare, tanpa Anda perlu memasukkan API key apa pun ke dalam aplikasi.
-
-    

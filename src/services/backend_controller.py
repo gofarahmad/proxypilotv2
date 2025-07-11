@@ -40,15 +40,16 @@ def log_message(level, message):
         sys.stderr.write(f"Logging failed: {e}\n")
 
 # --- Helper Functions ---
-def run_command(command_list, use_sudo=False, timeout=15):
+def run_command(command_list, timeout=15):
     try:
-        if command_list[0] == 'systemctl':
-            use_sudo = True
-        
-        cmd_to_run = ['sudo'] + command_list if use_sudo else command_list
-        
+        # Determine if the command requires elevated privileges
+        privileged_commands = ['systemctl', 'mmcli', 'cloudflared']
+        if command_list[0] in privileged_commands:
+             # Use pkexec for reliable privilege escalation from web server environment
+             command_list.insert(0, 'pkexec')
+
         result = subprocess.run(
-            cmd_to_run, check=True, capture_output=True, text=True, timeout=timeout
+            command_list, check=True, capture_output=True, text=True, timeout=timeout
         )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
@@ -65,25 +66,24 @@ def run_command(command_list, use_sudo=False, timeout=15):
             raise Exception(f"Systemd unit file '3proxy@.service' not found. Please check installation steps. Error: {error_output}")
         raise Exception(f"Command failed: {' '.join(command_list)}\nError: {error_output}")
     except FileNotFoundError:
-        log_message("ERROR", f"Command not found: {command_list[0]}. Is it installed and in your PATH?")
-        raise Exception(f"Command not found: {command_list[0]}. Is it installed and in your PATH?")
+        cmd = command_list[1] if command_list[0] == 'pkexec' else command_list[0]
+        log_message("ERROR", f"Command not found: {cmd}. Is it installed and in your PATH?")
+        raise Exception(f"Command not found: {cmd}. Is it installed and in your PATH?")
 
-def run_and_parse_json(command_list, use_sudo=False, timeout=15):
-    raw_output = run_command(command_list, use_sudo, timeout)
+def run_and_parse_json(command_list, timeout=15):
+    raw_output = run_command(command_list, timeout)
     if not raw_output:
         return {}
     try:
         return json.loads(raw_output)
     except json.JSONDecodeError:
-        # Check if this is a special error case we need to handle
         if isinstance(raw_output, str):
             try:
-                # Some mmcli commands return a JSON object with a bearer_error key on failure
                 data = json.loads(raw_output)
-                if data.get("bearer_error"):
-                    return data
+                if data.get("bearer_error"): return data
+                if data.get("vnstat_error"): return data
             except json.JSONDecodeError:
-                pass # Not a bearer error, fall through
+                pass 
         log_message("ERROR", f"Failed to parse JSON from command: {' '.join(command_list)}")
         raise Exception(f"Failed to parse JSON from command: {' '.join(command_list)}\nOutput: {raw_output}")
 
@@ -112,7 +112,7 @@ def get_or_create_proxy_config(interface_name, all_configs):
     new_http_port = PORT_RANGE_START
     while new_http_port in used_ports or (new_http_port + 1000) in used_ports:
         new_http_port += 1
-        if new_http_port > PORT_RANGE_END: # Check against the base port range
+        if new_http_port > PORT_RANGE_END:
             raise Exception("No available ports in the specified range.")
 
     new_socks_port = new_http_port + 1000
@@ -184,10 +184,11 @@ def get_proxy_status(interface_name, modem_status):
     if modem_status != 'connected':
         return 'stopped'
     try:
-        run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], use_sudo=True)
+        # This command is expected to fail if the service is not active.
+        run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"])
         return 'running'
     except Exception:
-        # This is an expected failure if the service is not active, so we just return stopped.
+        # Any exception here means the service is not active. This is not an error.
         return 'stopped'
         
 def get_public_ip(interface_name):
@@ -201,30 +202,20 @@ def get_public_ip(interface_name):
         return None
 
 def get_primary_lan_ip():
-    """
-    Finds the primary, non-modem, non-loopback IPv4 address of the server.
-    """
     try:
         output = run_command(['ip', '-j', 'addr'])
         interfaces = json.loads(output)
-        
-        # Define patterns for modem interfaces and excluded interfaces
         modem_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
         excluded_pattern = re.compile(r'^(lo|docker|veth|br-|cali|vxlan)')
         
         for iface in interfaces:
             ifname = iface.get('ifname', '')
-            
-            # Skip loopback, virtual, and modem interfaces
             if excluded_pattern.match(ifname) or modem_pattern.match(ifname):
                 continue
-            
-            # Find the first IPv4 address on a suitable interface
             for addr_info in iface.get('addr_info', []):
                 if addr_info.get('family') == 'inet':
                     return addr_info.get('local')
-                    
-        return None # Return None if no suitable IP is found
+        return None
     except Exception as e:
         log_message("ERROR", f"Could not determine primary LAN IP: {e}")
         return None
@@ -277,12 +268,12 @@ def enhance_with_mmcli_data(modems_dict):
         return modems_dict
 
     try:
-        modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'], use_sudo=True)
+        modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'])
         modem_paths = modem_list_data.get('modem-list', [])
 
         for modem_path in modem_paths:
             try:
-                modem_details_data = run_and_parse_json(['mmcli', '-m', modem_path, '-J'], use_sudo=True)
+                modem_details_data = run_and_parse_json(['mmcli', '-m', modem_path, '-J'])
                 modem_info = modem_details_data.get('modem', {})
                 interface_name = modem_info.get('generic', {}).get('primary-port')
                 if interface_name and interface_name in modems_dict:
@@ -326,7 +317,6 @@ def get_all_modem_statuses():
             if modem['proxyConfig'].get('customName'):
                  modem['name'] = modem['proxyConfig']['customName']
             
-            # Ensure bindIp is correctly set for listening on all interfaces
             proxy_configs.setdefault(interface_name, {})['bindIp'] = "0.0.0.0"
 
             if modem['status'] == 'connected' and modem['ipAddress']:
@@ -355,7 +345,7 @@ def proxy_action(action, interface_name):
             write_3proxy_config_file(interface_name, modem_status['ipAddress'])
 
         service_name = f"3proxy@{interface_name}.service"
-        run_command(['systemctl', action, service_name], use_sudo=True)
+        run_command(['systemctl', action, service_name])
         log_message("INFO", f"Proxy action '{action}' successful for {interface_name}.")
         return {"success": True, "data": {"message": f"Proxy {action} successful for {interface_name}"}}
     except Exception as e:
@@ -369,11 +359,11 @@ def modem_action(action, interface_name, args_json):
         if not is_command_available("mmcli"):
             raise Exception("`mmcli` command not found. This feature requires ModemManager to be installed.")
 
-        modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'], use_sudo=True)
+        modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'])
         modem_mm_path = None
         for modem_path in modem_list_data.get('modem-list', []):
             try:
-                modem_details_data = run_and_parse_json(['mmcli', '-m', modem_path, '-J'], use_sudo=True)
+                modem_details_data = run_and_parse_json(['mmcli', '-m', modem_path, '-J'])
                 if modem_details_data.get('modem', {}).get('generic', {}).get('primary-port') == interface_name:
                     modem_mm_path = modem_path
                     break
@@ -382,27 +372,27 @@ def modem_action(action, interface_name, args_json):
             raise Exception(f"Could not find modem '{interface_name}' managed by ModemManager.")
 
         if action == 'send-sms':
-            create_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, f'--messaging-create-sms=text="{args["message"]}",number="{args["recipient"]}"', '-J'], use_sudo=True)
+            create_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, f'--messaging-create-sms=text="{args["message"]}",number="{args["recipient"]}"', '-J'])
             sms_path = create_result.get('sms', {}).get('path')
             if not sms_path:
                 raise Exception("Failed to create SMS.")
-            run_command(['mmcli', '-s', sms_path, '--send'], use_sudo=True)
-            run_command(['mmcli', '-m', modem_mm_path, f'--messaging-delete-sms={sms_path.split("/")[-1]}'], use_sudo=True)
+            run_command(['mmcli', '-s', sms_path, '--send'])
+            run_command(['mmcli', '-m', modem_mm_path, f'--messaging-delete-sms={sms_path.split("/")[-1]}'])
             log_message("INFO", f"SMS sent to {args['recipient']} via {interface_name}.")
             return {"success": True, "data": {"message": "SMS sent successfully."}}
         elif action == 'read-sms':
-            list_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, '--messaging-list-sms', '-J'], use_sudo=True)
+            list_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, '--messaging-list-sms', '-J'])
             sms_paths = list_result.get('modem', {}).get('messaging', {}).get('sms', [])
             messages = []
             for sms_path in sms_paths:
-                sms_details_data = run_and_parse_json(['mmcli', '-s', sms_path, '-J'], use_sudo=True)
+                sms_details_data = run_and_parse_json(['mmcli', '-s', sms_path, '-J'])
                 sms_details = sms_details_data.get('sms', {})
                 content = sms_details.get('content', {})
                 messages.append({"id": sms_path.split('/')[-1], "from": content.get('number', 'Unknown'), "timestamp": sms_details.get('properties', {}).get('timestamp', ''), "content": content.get('text', '')})
             log_message("INFO", f"Read {len(messages)} SMS from {interface_name}.")
             return {"success": True, "data": messages}
         elif action == 'send-ussd':
-            response_str = run_command(['mmcli', '-m', modem_mm_path, f'--3gpp-ussd-initiate={args["ussdCode"]}'], use_sudo=True)
+            response_str = run_command(['mmcli', '-m', modem_mm_path, f'--3gpp-ussd-initiate={args["ussdCode"]}'])
             log_message("INFO", f"USSD '{args['ussdCode']}' sent via {interface_name}.")
             return {"success": True, "data": {"response": response_str}}
         return {"success": False, "error": "Unknown modem action"}
@@ -426,11 +416,11 @@ def rotate_ip(interface_name):
         
         modem_id_or_path = modem_to_rotate['id']
 
-        modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'], use_sudo=True)
+        modem_list_data = run_and_parse_json(['mmcli', '-L', '-J'])
         modem_mm_path = None
         for m_path in modem_list_data.get('modem-list', []):
             try:
-                modem_details_data = run_and_parse_json(['mmcli', '-m', m_path, '-J'], use_sudo=True)
+                modem_details_data = run_and_parse_json(['mmcli', '-m', m_path, '-J'])
                 if modem_details_data.get('modem', {}).get('generic', {}).get('device-identifier') == modem_id_or_path:
                     modem_mm_path = m_path
                     break
@@ -441,7 +431,7 @@ def rotate_ip(interface_name):
 
         log_message("INFO", f"[{interface_name}] Found modem at mmcli path: {modem_mm_path}")
         
-        modem_details_data = run_and_parse_json(['mmcli', '-m', modem_mm_path, '-J'], use_sudo=True, timeout=30)
+        modem_details_data = run_and_parse_json(['mmcli', '-m', modem_mm_path, '-J'], timeout=30)
         
         if modem_details_data.get("bearer_error"):
             raise Exception(f"Could not get modem details for rotation: {modem_details_data.get('message')}")
@@ -450,7 +440,7 @@ def rotate_ip(interface_name):
         
         active_bearer_path = None
         for bearer_path in bearer_list:
-            bearer_details = run_and_parse_json(['mmcli', '-b', bearer_path, '-J'], use_sudo=True)
+            bearer_details = run_and_parse_json(['mmcli', '-b', bearer_path, '-J'])
             if bearer_details.get('bearer', {}).get('status', {}).get('connected', False):
                 active_bearer_path = bearer_path
                 log_message("INFO", f"[{interface_name}] Found active bearer: {active_bearer_path}")
@@ -458,7 +448,7 @@ def rotate_ip(interface_name):
 
         if active_bearer_path:
             log_message("INFO", f"[{interface_name}] Disconnecting active bearer...")
-            run_command(['mmcli', '-b', active_bearer_path, '--disconnect'], use_sudo=True, timeout=30)
+            run_command(['mmcli', '-b', active_bearer_path, '--disconnect'], timeout=30)
         else:
             log_message("WARN", f"[{interface_name}] No active bearer found to disconnect, proceeding to connect.")
 
@@ -468,14 +458,13 @@ def rotate_ip(interface_name):
         apn = modem_details_data.get('modem', {}).get('3gpp', {}).get('operator-code')
         apn_param = f"apn={apn}" if apn else "" 
         log_message("INFO", f"[{interface_name}] Creating a new bearer...")
-        # Note: The bearer might not be named what we expect, so we just create and connect.
-        create_bearer_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, f'--create-bearer={apn_param}'], use_sudo=True, timeout=45)
+        create_bearer_result = run_and_parse_json(['mmcli', '-m', modem_mm_path, f'--create-bearer={apn_param}'], timeout=45)
         new_bearer_path = create_bearer_result.get('bearer', {}).get('path')
         if not new_bearer_path:
             raise Exception(f"Failed to create a new bearer for {interface_name}.")
         
         log_message("INFO", f"[{interface_name}] New bearer created at {new_bearer_path}. Connecting...")
-        run_command(['mmcli', '-b', new_bearer_path, '--connect'], use_sudo=True, timeout=60)
+        run_command(['mmcli', '-b', new_bearer_path, '--connect'], timeout=60)
         
         log_message("INFO", f"[{interface_name}] Waiting 15 seconds for new IP to be assigned and connection to stabilize...")
         run_command(['sleep', '15'], timeout=20)
@@ -515,9 +504,7 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
     
     if tunnel_type == "Ngrok":
         if not is_command_available("ngrok"): raise Exception("`ngrok` command not found.")
-        # We start ngrok in the background and detach it.
         process = subprocess.Popen(['ngrok', 'tcp', str(local_port), '--log=stdout'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid)
-        # Give ngrok a moment to start its API server
         run_command(['sleep', '2'], timeout=5)
         try:
             api_output = run_command(['curl', '-s', 'http://127.0.0.1:4040/api/tunnels'])
@@ -528,17 +515,15 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
                 raise Exception("Could not find started ngrok tunnel in ngrok API.")
             url = tunnel_info.get('public_url')
         except Exception as e:
-            # If we fail to get the URL, kill the process group to clean up.
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             raise e
     elif tunnel_type == "Cloudflare":
         if not is_command_available("cloudflared"): raise Exception("`cloudflared` command not found.")
         if not cloudflare_id: raise Exception("Cloudflare Tunnel ID is required.")
-        # The public URL is deterministic for Cloudflare named tunnels
-        url = f"tcp://{cloudflare_id}.trycloudflare.com" # This might need adjustment based on user's domain
+        url = f"tcp://{cloudflare_id}.trycloudflare.com"
         command = ['cloudflared', 'tunnel', 'run', '--url', f'tcp://localhost:{local_port}', cloudflare_id]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=os.setsid)
-        run_command(['sleep', '2'], timeout=5) # Give it a moment to connect
+        run_command(['sleep', '2'], timeout=5)
     else:
         raise Exception(f"Unknown tunnel type: {tunnel_type}")
 
@@ -556,7 +541,6 @@ def stop_tunnel(tunnel_id):
         return {"success": True, "message": "Tunnel was not running."}
     pid = tunnel_info.get('pid')
     try:
-        # Kill the entire process group to stop child processes (like ngrok)
         os.killpg(os.getpgid(pid), signal.SIGTERM)
         log_message("INFO", f"Stopped tunnel {tunnel_id} with PID {pid}.")
     except OSError as e:
@@ -584,11 +568,9 @@ def get_available_cloudflare_tunnels():
     cf_dir = Path(os.path.expanduser("~")) / ".cloudflared"
     tunnels = []
     if cf_dir.exists():
-        # The cert file is the Tunnel ID
         for cert_file in cf_dir.glob("*.pem"):
-            if '-' in cert_file.stem: # Basic check for UUID format
+            if '-' in cert_file.stem:
                 tunnel_id = cert_file.stem
-                # We don't know the tunnel *name* here, just the ID.
                 tunnels.append({"id": tunnel_id, "name": f"Cloudflare Tunnel ({tunnel_id[:8]}...)"})
     return {"success": True, "data": tunnels}
 
@@ -597,7 +579,6 @@ def get_vnstat_interfaces():
     if not is_command_available("vnstat"):
         raise Exception("`vnstat` is not installed.")
     try:
-        # Use --json output to avoid parsing text
         vnstat_output = run_and_parse_json(['vnstat', '-J'])
         vnstat_interfaces = {iface.get('name') for iface in vnstat_output.get('interfaces', [])}
         
@@ -614,13 +595,11 @@ def get_modem_interface_names():
     modems = {}
     if not is_command_available("ip"):
         return []
-
     try:
         output = run_command(['ip', '-j', 'addr'])
         interfaces = json.loads(output)
         modem_interface_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
         excluded_pattern = re.compile(r'^(lo|eth|wlan|docker|veth|br-|cali|vxlan)')
-
         for iface in interfaces:
             ifname = iface.get('ifname', '')
             if modem_interface_pattern.match(ifname) and not excluded_pattern.match(ifname):
@@ -738,3 +717,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
