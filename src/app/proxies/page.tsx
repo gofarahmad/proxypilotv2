@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Network, Play, StopCircle, RefreshCw, Loader2, ServerCrash, ShieldQuestion, Waypoints, AlertTriangle, KeyRound, Lock, Pencil } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { ModemStatus } from '@/services/network-service';
@@ -105,29 +105,30 @@ export default function ProxyControlPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  const activePolls = useRef(new Set<string>()).current;
 
-  const fetchProxiesData = useCallback(async () => {
-    // Don't set loading to true on auto-refresh, only on initial load.
-    if (proxies.length === 0) setIsLoading(true);
+  const fetchProxiesData = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+        setIsLoading(true);
+    }
     setError(null);
     try {
       const modemData = await getAllModemStatuses();
       
       const proxiesWithDetails = await Promise.all(
         modemData.map(async (m) => {
-          // Tunnel logic remains, as it's a separate state system
           const tunnelIdHttp = `tunnel_http_${m.interfaceName}`;
           const tunnelIdSocks = `tunnel_socks_${m.interfaceName}`;
           const tunnelHttp = await getTunnelStatus(tunnelIdHttp);
           const tunnelSocks = await getTunnelStatus(tunnelIdSocks);
-          // For simplicity, we can just check one tunnel for the UI status, or combine them.
-          // Let's assume for now we only tunnel one port, e.g. HTTP.
           const tunnel = tunnelHttp || tunnelSocks;
+
+          const existingProxy = proxies.find(p => p.interfaceName === m.interfaceName);
 
           return { 
             ...m, 
-            proxyLoading: false, 
-            tunnelLoading: false,
+            proxyLoading: existingProxy?.proxyLoading || false, 
+            tunnelLoading: existingProxy?.tunnelLoading || false,
             config: m.proxyConfig || null,
             tunnel: tunnel 
           };
@@ -140,20 +141,61 @@ export default function ProxyControlPage() {
       toast({ title: 'Error fetching proxies', description: errorMessage, variant: 'destructive' });
       setError("Could not load proxy data. Please ensure the backend service is running correctly.");
     } finally {
-      setIsLoading(false);
+      if (isRefresh) {
+        setIsLoading(false);
+      }
     }
-  }, [toast, proxies.length]);
+  }, [toast, proxies]);
 
   useEffect(() => {
-    fetchProxiesData();
-    const interval = setInterval(fetchProxiesData, 30000); // Refresh every 30 seconds
+    setIsLoading(true);
+    fetchProxiesData(false).finally(() => setIsLoading(false));
+    const interval = setInterval(() => fetchProxiesData(false), 30000);
     return () => clearInterval(interval);
-  }, [fetchProxiesData]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const pollForStatusChange = useCallback(async (interfaceName: string, targetStatus: 'running' | 'stopped') => {
+      if (activePolls.has(interfaceName)) return;
+      activePolls.add(interfaceName);
+
+      let attempts = 0;
+      const maxAttempts = 5; // Poll for 10 seconds (5 attempts * 2s delay)
+
+      const poll = async () => {
+          if (attempts >= maxAttempts) {
+              setProxies(prev => prev.map(p => p.interfaceName === interfaceName ? { ...p, proxyLoading: false } : p));
+              activePolls.delete(interfaceName);
+              return;
+          }
+
+          attempts++;
+          const allStatuses = await getAllModemStatuses();
+          const currentProxy = allStatuses.find(m => m.interfaceName === interfaceName);
+
+          if (currentProxy?.proxyStatus === targetStatus) {
+              setProxies(prev => allStatuses.map(newStatus => ({
+                  ...newStatus,
+                  proxyLoading: false,
+                  tunnelLoading: prev.find(p => p.interfaceName === newStatus.interfaceName)?.tunnelLoading || false,
+                  config: newStatus.proxyConfig || null,
+                  tunnel: null, // This will be repopulated on next full fetch
+              })));
+              activePolls.delete(interfaceName);
+          } else {
+              setTimeout(poll, 2000);
+          }
+      };
+
+      poll();
+  }, [activePolls]);
 
   const handleProxyAction = async (interfaceName: string, action: 'start' | 'stop' | 'restart') => {
     setProxies(prev => prev.map(p => p.interfaceName === interfaceName ? { ...p, proxyLoading: true } : p));
     
     try {
+      const targetStatus = (action === 'start' || action === 'restart') ? 'running' : 'stopped';
+
       if (action === 'start') await startProxy(interfaceName);
       else if (action === 'stop') await stopProxy(interfaceName);
       else await restartProxy(interfaceName);
@@ -162,8 +204,8 @@ export default function ProxyControlPage() {
         title: `Proxy ${action} initiated`,
         description: `Request to ${action} proxy on ${interfaceName} sent.`,
       });
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait a moment for service to update
-      await fetchProxiesData();
+
+      await pollForStatusChange(interfaceName, targetStatus);
 
     } catch (error) {
        const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
@@ -173,7 +215,6 @@ export default function ProxyControlPage() {
   };
 
   const handleTunnelAction = async (proxy: ProxyInstance, action: 'start' | 'stop') => {
-      // Tunneling the HTTP port by default
       if (!proxy.config?.httpPort) {
           toast({ title: "Cannot Start Tunnel", description: "Proxy HTTP port is not configured.", variant: "destructive" });
           return;
@@ -192,7 +233,8 @@ export default function ProxyControlPage() {
               description: `Tunnel for proxy on ${proxy.interfaceName} has been ${action}ed.`
           });
           await new Promise(resolve => setTimeout(resolve, 2500)); // Wait for tunnel state to update
-          await fetchProxiesData();
+          await fetchProxiesData(false);
+          setProxies(prev => prev.map(p => p.interfaceName === proxy.interfaceName ? { ...p, tunnelLoading: false } : p));
       } catch (error) {
           const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
           toast({ title: `Error ${action}ing tunnel`, description: errorMessage, variant: "destructive" });
@@ -283,7 +325,7 @@ export default function ProxyControlPage() {
                                 {isAuthenticated ? <Lock className="inline mr-1 h-3 w-3" /> : <KeyRound className="inline mr-1 h-3 w-3" />}
                                 {isAuthenticated ? 'Authenticated' : 'Open (No Auth)'}
                             </Badge>
-                            <CredentialsDialog proxy={proxy} onCredentialsUpdate={fetchProxiesData} />
+                            <CredentialsDialog proxy={proxy} onCredentialsUpdate={() => fetchProxiesData(true)} />
                         </div>
                     </div>
                     
@@ -364,7 +406,7 @@ export default function ProxyControlPage() {
         title="Proxy Control"
         description="Start, stop, manage credentials, and create internet tunnels for your proxy servers."
         actions={
-          <Button onClick={fetchProxiesData} disabled={isLoading}>
+          <Button onClick={() => fetchProxiesData(true)} disabled={isLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh All
           </Button>
@@ -374,3 +416,5 @@ export default function ProxyControlPage() {
     </>
   );
 }
+
+    
