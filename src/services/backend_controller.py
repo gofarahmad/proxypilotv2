@@ -152,13 +152,6 @@ def run_command(
         
         if suppress_error:
             return error_output
-
-        if "couldn't find bearer" in error_output.lower():
-            return json.dumps({"bearer_error": True, "message": "Modem bearer (data connection) not found."})
-        if "unable to read database" in error_output.lower():
-            return json.dumps({"vnstat_error": "not_ready", "message": "vnstat database is not ready or has no data."})
-        if "Unit 3proxy@" in error_output and "not found" in error_output:
-            raise Exception("Systemd unit file '3proxy@.service' not found. Please check installation steps.")
         
         raise Exception(f"Command failed with exit code {e.returncode}: {error_output}")
 
@@ -170,13 +163,6 @@ def run_and_parse_json(command_list: List[str], timeout: Optional[int] = None) -
     try:
         return json.loads(raw_output)
     except json.JSONDecodeError:
-        try:
-            data = json.loads(raw_output)
-            if data.get("bearer_error") or data.get("vnstat_error"):
-                return data
-        except json.JSONDecodeError:
-            pass
-        
         error_msg = f"Failed to parse JSON from command: {' '.join(command_list)}"
         log_message("ERROR", f"{error_msg}\nRaw Output: {raw_output}")
         raise Exception(f"{error_msg}. Check logs for details.")
@@ -185,7 +171,6 @@ def run_and_parse_json(command_list: List[str], timeout: Optional[int] = None) -
 def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[Dict, bool]:
     """
     Gets an existing proxy config or generates a new one with non-overlapping port ranges.
-    This is the corrected, definitive logic.
     """
     if interface_name in all_configs and all(k in all_configs[interface_name] for k in ['httpPort', 'socksPort']):
         return all_configs[interface_name], False
@@ -245,8 +230,11 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
             f"allow {username}"
         ])
     else:
+        # For open proxies, allow any local connection
         lines.append("auth none")
-
+    
+    # -n flag disables NTLM authentication, which is generally safer
+    # -a flag allows anonymous connections (only used when auth is none)
     proxy_flags = "-n"
     if not is_authenticated:
         proxy_flags += " -a"
@@ -262,6 +250,7 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
     ])
     
     return "\n".join(lines)
+
 
 def write_3proxy_config_file(interface_name: str, egress_ip: str) -> Optional[str]:
     """Writes a 3proxy configuration file for a given modem interface."""
@@ -296,15 +285,20 @@ def get_proxy_status(interface_name: str) -> str:
     """Checks if the 3proxy service for a specific interface is active."""
     # This command is expected to fail if the service is not active.
     # We suppress the exception and check the output.
-    result = run_command(
-        ['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], 
-        check=False, 
-        suppress_error=True
-    )
-    if result == 'active':
-        return 'running'
-    else:
+    try:
+        result = run_command(
+            ['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], 
+            check=False,
+            suppress_error=True
+        )
+        if result == 'active':
+            return 'running'
+        else:
+            return 'stopped'
+    except Exception:
+        # If any other exception occurs (e.g., pkexec fails), assume stopped.
         return 'stopped'
+
 
 def get_public_ip(interface_name: str) -> Optional[str]:
     """Gets the public IP address for a specific network interface."""
@@ -362,7 +356,7 @@ def get_all_modem_statuses() -> Dict:
                     if ifname and ifname in all_modems:
                         all_modems[ifname]['id'] = details.get('modem', {}).get('generic', {}).get('device-identifier', ifname)
                         all_modems[ifname]['name'] = details.get('modem',{}).get('device-properties',{}).get('device.product', f"Modem ({ifname})")
-                        all_modems[ifname]['source'] = "mmcli_enhanced"
+                        all_modem_statuses[ifname]['source'] = "mmcli_enhanced"
             except Exception as e:
                 log_message("WARN", f"Could not enhance with mmcli data: {e}")
 
@@ -399,9 +393,23 @@ def get_all_modem_statuses() -> Dict:
         log_message("ERROR", f"Critical error in get_all_modem_statuses: {e}")
         return {"success": False, "error": str(e)}
 
+def _verify_3proxy_service_template():
+    """Checks for the systemd service file in common locations."""
+    locations = [
+        Path("/etc/systemd/system/3proxy@.service"),
+        Path("/lib/systemd/system/3proxy@.service")
+    ]
+    if not any(loc.exists() for loc in locations):
+        raise Exception(
+            "Systemd unit file '3proxy@.service' not found. "
+            "Please ensure it exists in /etc/systemd/system/ or /lib/systemd/system/. "
+            "Check installation steps in README."
+        )
+
 def proxy_action(action: str, interface_name: str) -> Dict:
     """Handles start, stop, and restart actions for a proxy service."""
     try:
+        _verify_3proxy_service_template()
         service_name = f"3proxy@{interface_name}.service"
         log_message("INFO", f"Attempting to {action} proxy for {interface_name}.")
         run_command(['systemctl', action, service_name])
@@ -770,3 +778,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
