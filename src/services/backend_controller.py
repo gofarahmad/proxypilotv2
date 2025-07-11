@@ -11,6 +11,7 @@ import re
 import signal
 import secrets
 import fcntl  # Untuk file locking
+import time
 from typing import Dict, List, Tuple, Optional, Union, Any
 
 # --- Configuration ---
@@ -46,7 +47,6 @@ def log_message(level: str, message: str) -> None:
     try:
         log_file_path = CONFIG.get('LOG_FILE')
         if not isinstance(log_file_path, Path):
-            # Fallback if config isn't initialized yet
             log_file_path = Path(os.path.expanduser("~")) / ".proxy_pilot_state" / "activity.log"
             log_file_path.parent.mkdir(exist_ok=True)
         
@@ -59,7 +59,6 @@ def log_message(level: str, message: str) -> None:
                 f.seek(0)
                 lines = f.readlines()
                 
-                # Simple rotation logic
                 if len(lines) >= CONFIG['LOG_MAX_ENTRIES']:
                     lines_to_keep = lines[-(CONFIG['LOG_MAX_ENTRIES'] - 1):]
                     f.seek(0)
@@ -106,11 +105,14 @@ def write_state_file(file_path: Path, data: Any) -> bool:
 
 # --- Command Execution ---
 def run_command(command_list: List[str], timeout: Optional[int] = None, check: bool = True) -> str:
-    """Executes a system command and captures its output."""
+    """
+    Executes a system command and captures its output.
+    Uses 'pkexec' for commands requiring root privileges.
+    """
     if timeout is None:
         timeout = CONFIG['DEFAULT_TIMEOUT']
 
-    privileged_commands = {'systemctl', 'mmcli', 'cloudflared', 'netfilter-persistent', 'iptables'}
+    privileged_commands = {'systemctl', 'mmcli', 'cloudflared', 'netfilter-persistent', 'iptables', 'kill'}
     cmd_to_check = command_list[0]
     
     if cmd_to_check in privileged_commands and 'pkexec' not in command_list:
@@ -187,13 +189,13 @@ def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[
     
     new_config = {
         "httpPort": http_port,
-        "socksPort": http_port + 1000,
+        "socksPort": http_port, # SOCKS will use the same port number for simplicity in this model
         "username": f"user_{secrets.token_hex(2)}",
         "password": secrets.token_hex(8),
         "customName": None
     }
     
-    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP:{new_config['httpPort']}/SOCKS:{new_config['socksPort']}")
+    log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP/SOCKS Port:{new_config['httpPort']}")
     return new_config, True
 
 # --- 3Proxy Config File Generation ---
@@ -205,35 +207,43 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
     username = config.get('username')
     password = config.get('password')
     http_port = config['httpPort']
-    socks_port = config['socksPort']
-    
-    # Listening IP: 0.0.0.0 makes it accessible from the entire LAN.
+    # SOCKS port now uses a different range for clarity as per previous discussion
+    socks_port = http_port + 1000 
     listening_ip = "0.0.0.0"
 
     lines = [
-        "daemon",
         "nscache 65536",
         "nserver 8.8.8.8",
         "nserver 8.8.4.4",
         "timeouts 1 5 30 60 180 1800 15 60",
+        "daemon",
     ]
 
-    # Authentication block
-    lines.extend([
-        f"users {username}:CL:{password}",
-        "auth strong",
-        f"allow {username}"
-    ])
+    is_authenticated = bool(username and password)
 
-    # Proxy and SOCKS services
-    # -n disables NTLM authentication, which is good practice.
-    # We DO NOT use -a (anonymous) because we use `auth strong`.
+    if is_authenticated:
+        lines.extend([
+            f"users {username}:CL:{password}",
+            "auth strong",
+            f"allow {username}"
+        ])
+    else:
+        # If no auth, allow anyone but it's bound to egress IP so it's not a public relay
+        lines.append("auth none")
+
+    proxy_flags = "-n"
+    socks_flags = "" # socks does not have the -n flag
+
+    if not is_authenticated:
+        proxy_flags += " -a"
+        socks_flags += " -a"
+
     lines.extend([
-        f"proxy -n -p{http_port} -i{listening_ip} -e{egress_ip}",
-        f"socks -p{socks_port} -i{listening_ip} -e{egress_ip}"
+        f"proxy {proxy_flags} -p{http_port} -i{listening_ip} -e{egress_ip}",
+        f"socks {socks_flags} -p{socks_port} -i{listening_ip} -e{egress_ip}",
+        "flush"
     ])
     
-    lines.append("flush")
     return "\n".join(lines)
 
 
@@ -269,12 +279,11 @@ def is_command_available(command):
 def get_proxy_status(interface_name: str) -> str:
     """Checks if the 3proxy service for a specific interface is active."""
     try:
-        # Use check=False as a non-zero exit code is expected for 'inactive'
-        # and we want to handle it gracefully.
+        # Use check=True. If the command fails (i.e., service is not active), it raises CalledProcessError.
         run_command(['systemctl', 'is-active', '--quiet', f"3proxy@{interface_name}.service"], check=True)
         return 'running'
     except Exception:
-        # Any exception (command fails, returns non-zero) means it's not running.
+        # Any exception means it's not running or there's an issue.
         return 'stopped'
 
 
@@ -282,7 +291,8 @@ def get_public_ip(interface_name: str) -> Optional[str]:
     """Gets the public IP address for a specific network interface."""
     if not is_command_available("curl"): return None
     try:
-        return run_command(['curl', '--interface', interface_name, '--connect-timeout', '5', 'https://api.ipify.org'], timeout=10)
+        # Add a longer timeout for curl
+        return run_command(['curl', '--interface', interface_name, '--connect-timeout', '10', 'https://api.ipify.org'], timeout=20)
     except Exception:
         return None
 
@@ -296,21 +306,19 @@ def get_primary_lan_ip() -> Optional[str]:
         candidate_ips = []
         for iface in interfaces:
             ifname = iface.get('ifname', '')
-            # Rule: must not be an excluded interface AND must not be a modem interface
-            if not excluded_pattern.match(ifname) and not modem_pattern.match(ifname):
+            if iface.get('operstate') == 'UP' and not excluded_pattern.match(ifname) and not modem_pattern.match(ifname):
                 for addr_info in iface.get('addr_info', []):
                     if addr_info.get('family') == 'inet':
                         candidate_ips.append(addr_info.get('local'))
 
-        # Return the first valid IP found
         return candidate_ips[0] if candidate_ips else None
-    except Exception:
+    except Exception as e:
+        log_message("WARN", f"Could not determine primary LAN IP: {e}")
         return None
 
 def get_all_modem_statuses() -> Dict:
     """The main function to aggregate all modem and proxy information."""
     try:
-        # 1. Base detection using 'ip addr'
         interfaces = run_and_parse_json(['ip', '-j', 'addr'])
         modem_pattern = re.compile(r'^(enx|usb|wwan|ppp)')
         all_modems = {}
@@ -326,7 +334,6 @@ def get_all_modem_statuses() -> Dict:
                     "status": status, "ipAddress": ip_address, "source": "ip_addr", "serverLanIp": server_lan_ip
                 }
         
-        # 2. Enhance with mmcli if available
         if is_command_available("mmcli"):
             try:
                 mm_list = run_and_parse_json(['mmcli', '-L', '-J'])
@@ -340,24 +347,27 @@ def get_all_modem_statuses() -> Dict:
             except Exception as e:
                 log_message("WARN", f"Could not enhance with mmcli data: {e}")
 
-        # 3. Add proxy configs, statuses, and public IPs
         status_list = list(all_modems.values())
         proxy_configs = read_state_file(CONFIG['PROXY_CONFIGS_FILE'])
         configs_changed = False
         
         for modem in status_list:
+            # We need to pass the full dict to modify it
             cfg, created = get_or_create_proxy_config(modem['interfaceName'], proxy_configs)
             if created:
                 proxy_configs[modem['interfaceName']] = cfg
                 configs_changed = True
             
-            modem['proxyConfig'] = cfg
-            if cfg.get('customName'): modem['name'] = cfg['customName']
+            # Ensure the config on the modem object is the most up-to-date one
+            modem['proxyConfig'] = proxy_configs.get(modem['interfaceName'])
+            if modem['proxyConfig'] and modem['proxyConfig'].get('customName'):
+                 modem['name'] = modem['proxyConfig']['customName']
             
             if modem['status'] == 'connected' and modem['ipAddress']:
                 modem['publicIpAddress'] = get_public_ip(modem['interfaceName'])
                 modem['proxyStatus'] = get_proxy_status(modem['interfaceName'])
-                write_3proxy_config_file(modem['interfaceName'], modem['ipAddress'])
+                if modem['proxyStatus'] == 'stopped': # Only write if stopped to avoid race conditions
+                    write_3proxy_config_file(modem['interfaceName'], modem['ipAddress'])
             else:
                 modem['publicIpAddress'] = None
                 modem['proxyStatus'] = 'stopped'
@@ -383,36 +393,21 @@ def proxy_action(action: str, interface_name: str) -> Dict:
 def rotate_ip(interface_name: str) -> Dict:
     """Disconnects and reconnects a modem via mmcli to get a new IP address."""
     try:
-        # Find the modem's path from its interface name
-        mm_list = run_and_parse_json(['mmcli', '-L', '-J'])
-        modem_path = None
-        for modem_in_list in mm_list.get('modem-list', []):
-            details = run_and_parse_json(['mmcli', '-m', modem_in_list, '-J'])
-            if details.get('modem', {}).get('generic', {}).get('primary-port') == interface_name:
-                modem_path = modem_in_list
-                break
-        
-        if not modem_path:
-            raise Exception("Could not find a ModemManager-controlled modem for this interface.")
+        modem_path = _get_modem_path_for_interface(interface_name)
 
-        # Find the bearer path
         modem_details = run_and_parse_json(['mmcli', '-m', modem_path, '-J'])
         bearer_path = modem_details.get('modem', {}).get('generic', {}).get('bearers', [None])[0]
         if not bearer_path:
             raise Exception("Modem has no active data bearer/connection to disconnect.")
         
-        # Disconnect, then connect
         log_message("INFO", f"Rotating IP for {interface_name}: Disconnecting bearer {bearer_path}")
         run_command(['mmcli', '-b', bearer_path, '--disconnect'])
-        # A short delay can help before reconnecting
         time.sleep(5) 
         log_message("INFO", f"Rotating IP for {interface_name}: Reconnecting bearer {bearer_path}")
         run_command(['mmcli', '-b', bearer_path, '--connect'])
         
-        # A longer delay to allow the interface to get a new IP
         time.sleep(10)
         
-        # Get the new IP
         all_statuses = get_all_modem_statuses()
         if not all_statuses.get('success'):
             raise Exception("Failed to get modem statuses after reconnection.")
@@ -423,6 +418,10 @@ def rotate_ip(interface_name: str) -> Dict:
             
         new_ip = new_status['ipAddress']
         log_message("INFO", f"IP rotation for {interface_name} successful. New IP: {new_ip}")
+        # Automatically restart proxy to bind to the new IP if it was running
+        if new_status.get('proxyStatus') == 'running':
+            log_message("INFO", f"Proxy for {interface_name} was running, restarting it to apply new IP.")
+            proxy_action('restart', interface_name)
         return {"success": True, "newIp": new_ip}
     except Exception as e:
         log_message("ERROR", f"Failed to rotate IP for {interface_name}: {e}")
@@ -439,7 +438,6 @@ def update_proxy_config(interface_name: str, config_update: Dict) -> Dict:
         if interface_name not in all_configs:
             return {"success": False, "error": "Proxy config not found."}
         
-        # Only update allowed fields
         allowed_keys = ['username', 'password', 'customName']
         for key, value in config_update.items():
             if key in allowed_keys:
@@ -447,12 +445,22 @@ def update_proxy_config(interface_name: str, config_update: Dict) -> Dict:
 
         write_state_file(CONFIG['PROXY_CONFIGS_FILE'], all_configs)
         
-        # Restart the proxy to apply new settings
-        restart_result = proxy_action('restart', interface_name)
-        if not restart_result['success']:
-            raise Exception(f"Config updated, but failed to restart proxy: {restart_result.get('error')}")
+        # Check current status before restarting
+        current_status = get_proxy_status(interface_name)
+        if current_status == 'running':
+            log_message("INFO", f"Restarting proxy for {interface_name} to apply config changes.")
+            restart_result = proxy_action('restart', interface_name)
+            if not restart_result['success']:
+                raise Exception(f"Config updated, but failed to restart proxy: {restart_result.get('error')}")
+            return {"success": True, "message": "Configuration updated and proxy restarted."}
+        else:
+            # If proxy is stopped, just update the config file
+            all_statuses = get_all_modem_statuses()
+            modem_info = next((m for m in all_statuses.get('data', []) if m['interfaceName'] == interface_name), None)
+            if modem_info and modem_info.get('ipAddress'):
+                 write_3proxy_config_file(interface_name, modem_info['ipAddress'])
+            return {"success": True, "message": "Configuration updated. Start the proxy to apply changes."}
 
-        return {"success": True, "message": "Configuration updated and proxy restarted."}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -467,7 +475,8 @@ def get_vnstat_interfaces() -> Dict:
         interfaces = [iface['name'] for iface in vnstat_data.get('interfaces', [])]
         return {"success": True, "data": interfaces}
     except Exception as e:
-        return {"success": False, "error": f"Failed to get vnstat interface list: {e}"}
+        log_message("WARN", f"Could not get vnstat interfaces: {e}. Is vnstat running and has data?")
+        return {"success": True, "data": []} # Return empty list on failure, not an error
 
 def get_vnstat_stats(interface_name: str) -> Dict:
     """Gets all traffic stats for a specific interface from vnstat."""
@@ -480,7 +489,6 @@ def get_vnstat_stats(interface_name: str) -> Dict:
         if not interface_data:
             raise Exception("Interface not found in vnstat output.")
             
-        # Extract and format relevant data
         stats = {
             "name": interface_data.get('name'),
             "totalrx": interface_data.get('traffic', {}).get('total', {}).get('rx', 0),
@@ -504,11 +512,18 @@ def send_sms(interface_name: str, args: Dict) -> Dict:
             raise ValueError("Recipient and message are required.")
             
         sms_create_cmd = ['mmcli', '-m', modem_path, f'--messaging-create-sms=text="{message}",number="{recipient}"']
-        sms_path = run_command(sms_create_cmd).split(':')[-1].strip()
+        sms_path_output = run_command(sms_create_cmd)
+        
+        sms_path_match = re.search(r'(/org/freedesktop/ModemManager1/SMS/\d+)', sms_path_output)
+        if not sms_path_match:
+            raise Exception(f"Could not parse SMS path from output: {sms_path_output}")
+        sms_path = sms_path_match.group(1)
         
         run_command(['mmcli', '-s', sms_path, '--send'])
+        log_message("INFO", f"SMS sent successfully via {interface_name} to {recipient}")
         return {"success": True, "message": f"SMS sent to {recipient}"}
     except Exception as e:
+        log_message("ERROR", f"Failed to send SMS via {interface_name}: {e}")
         return {"success": False, "error": str(e)}
 
 def read_sms(interface_name: str) -> Dict:
@@ -529,6 +544,7 @@ def read_sms(interface_name: str) -> Dict:
             })
         return {"success": True, "data": messages}
     except Exception as e:
+        log_message("ERROR", f"Failed to read SMS from {interface_name}: {e}")
         return {"success": False, "error": str(e)}
 
 def send_ussd(interface_name: str, args: Dict) -> Dict:
@@ -543,6 +559,7 @@ def send_ussd(interface_name: str, args: Dict) -> Dict:
         response = run_command(initiate_cmd)
         return {"success": True, "response": response}
     except Exception as e:
+        log_message("ERROR", f"Failed to send USSD via {interface_name}: {e}")
         return {"success": False, "error": str(e)}
 
 def _get_modem_path_for_interface(interface_name: str) -> str:
@@ -558,12 +575,11 @@ def _get_modem_path_for_interface(interface_name: str) -> str:
 def get_available_cloudflare_tunnels():
     """Gets list of available (configured) Cloudflare tunnels."""
     try:
-        # We don't use pkexec here as cloudflared tunnel list doesn't require root usually
-        # if the user has authenticated with `cloudflared tunnel login`.
+        if not is_command_available('cloudflared'):
+            return {"success": True, "data": []}
         tunnels_raw = run_command(['cloudflared', 'tunnel', 'list', '--output', 'json'], check=True)
         tunnels_list = json.loads(tunnels_raw)
         
-        # Filter for healthy, active tunnels
         active_tunnels = [
             {"id": t['id'], "name": t['name']} 
             for t in tunnels_list 
@@ -571,7 +587,6 @@ def get_available_cloudflare_tunnels():
         ]
         return {"success": True, "data": active_tunnels}
     except Exception as e:
-        # It's okay if this fails (e.g., cloudflared not installed/configured), just return empty.
         log_message("WARN", f"Could not get Cloudflare tunnels: {e}")
         return {"success": True, "data": []}
 
@@ -583,11 +598,9 @@ def get_all_tunnel_statuses():
     for tunnel_id, info in pids.items():
         status = 'inactive'
         try:
-            # Check if process exists
             os.kill(info['pid'], 0)
             status = 'active'
         except OSError:
-            # PID doesn't exist, it's inactive
             pass
             
         statuses.append({
@@ -609,13 +622,9 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
             log_message("INFO", f"Tunnel {tunnel_id} is already running.")
             return {"success": True, "message": "Tunnel already running."}
         except OSError:
-            pass # Not running, can proceed
+            pass
 
     log_message("INFO", f"Starting {tunnel_type} tunnel '{tunnel_id}' for port {local_port}.")
-    
-    # Detach the process from the current one
-    # We use a simple nohup and & to background the process
-    # This is simpler than using Popen with special flags.
     
     if tunnel_type == 'Cloudflare':
         if not cloudflare_id:
@@ -630,14 +639,12 @@ def start_tunnel(tunnel_id, local_port, linked_to, tunnel_type, cloudflare_id=No
         pids[tunnel_id] = {
             "pid": pid,
             "localPort": local_port,
-            "linkedTo": linked_to,
+            "linkedTo": linkedTo,
             "type": tunnel_type,
-            "url": None # URL will be populated later
+            "url": None
         }
 
-        # For Ngrok, we need to parse the log to find the public URL
         if tunnel_type == 'Ngrok':
-            # Give it a moment to start up and write the log
             time.sleep(3) 
             try:
                 with open(f'/tmp/ngrok_{tunnel_id}.log', 'r') as log_file:
@@ -662,7 +669,6 @@ def stop_tunnel(tunnel_id):
     if tunnel_id in pids:
         pid = pids[tunnel_id]['pid']
         try:
-            # Use pkexec to ensure permission to kill the process
             run_command(['kill', '-9', str(pid)])
             log_message("INFO", f"Stopped tunnel {tunnel_id} (PID: {pid}).")
         except Exception as e:
@@ -679,13 +685,12 @@ def get_logs() -> Dict:
     """Reads and returns the content of the log file."""
     try:
         log_file_path = CONFIG.get('LOG_FILE')
-        if not log_file_path.exists():
+        if not log_file_path or not log_file_path.exists():
             return {"success": True, "data": []}
         
         with open(log_file_path, 'r') as f:
             fcntl.flock(f, fcntl.LOCK_SH)
             try:
-                # Read lines and parse JSON for each
                 logs = [json.loads(line) for line in f if line.strip()]
                 return {"success": True, "data": logs}
             finally:
@@ -710,23 +715,28 @@ def main():
         
         action_map = {
             'get_all_modem_statuses': lambda: get_all_modem_statuses(),
-            'start': lambda: proxy_action('start', args[0]),
-            'stop': lambda: proxy_action('stop', args[0]),
-            'restart': lambda: proxy_action('restart', args[0]),
+            'start_proxy': lambda: proxy_action('start', args[0]),
+            'stop_proxy': lambda: proxy_action('stop', args[0]),
+            'restart_proxy': lambda: proxy_action('restart', args[0]),
             'rotate_ip': lambda: rotate_ip(args[0]),
             'get_all_configs': lambda: get_all_configs(),
             'update_proxy_config': lambda: update_proxy_config(args[0], json.loads(args[1])),
             'get_vnstat_interfaces': lambda: get_vnstat_interfaces(),
             'get_vnstat_stats': lambda: get_vnstat_stats(args[0]),
-            'send-sms': lambda: send_sms(args[0], json.loads(args[1])),
-            'read-sms': lambda: read_sms(args[0]),
-            'send-ussd': lambda: send_ussd(args[0], json.loads(args[1])),
+            'send_sms': lambda: send_sms(args[0], json.loads(args[1])),
+            'read_sms': lambda: read_sms(args[0]),
+            'send_ussd': lambda: send_ussd(args[0], json.loads(args[1])),
             'get_logs': lambda: get_logs(),
             'get_available_cloudflare_tunnels': lambda: get_available_cloudflare_tunnels(),
             'get_all_tunnel_statuses': lambda: get_all_tunnel_statuses(),
             'start_tunnel': lambda: start_tunnel(args[0], int(args[1]), args[2], args[3], args[4] if len(args) > 4 else None),
             'stop_tunnel': lambda: stop_tunnel(args[0]),
         }
+
+        # Simplified action names from frontend
+        if action == "start": action = "start_proxy"
+        if action == "stop": action = "stop_proxy"
+        if action == "restart": action = "restart_proxy"
 
         if action in action_map:
             result = action_map[action]()
@@ -737,10 +747,9 @@ def main():
         log_message("ERROR", f"Unhandled error executing action '{action}': {e}")
         result = {"success": False, "error": str(e), "type": type(e).__name__}
     
-    print(json.dumps(result, indent=4))
+    print(json.dumps(result, indent=None))
 
 if __name__ == "__main__":
-    import time # Import time here as it's only used in one function
     main()
 
-      
+    
