@@ -118,14 +118,14 @@ def get_or_create_proxy_config(interface_name, all_configs):
         "username": new_username, 
         "password": new_password, 
         "type": "Proxy", 
-        "bindIp": None, 
+        "bindIp": "0.0.0.0", 
         "customName": None
     }
     log_message("INFO", f"Generated new proxy config for {interface_name} on HTTP Port {new_http_port}, SOCKS Port {new_socks_port} with user {new_username}.")
     return new_config, True
 
-def generate_3proxy_config_content(config, ip_address):
-    if not ip_address or not config.get('httpPort') or not config.get('socksPort'):
+def generate_3proxy_config_content(config, egress_ip):
+    if not egress_ip or not config.get('httpPort') or not config.get('socksPort'):
         return None
     
     http_port = config['httpPort']
@@ -136,24 +136,26 @@ def generate_3proxy_config_content(config, ip_address):
     if is_authenticated:
         auth_lines = f"users {config['username']}:CL:{config['password']}\nallow {config['username']}"
 
+    # -i 0.0.0.0 to listen on all interfaces (for LAN access)
+    # -e <egress_ip> to route traffic out through the correct modem interface IP
     return f"""daemon
 nserver 8.8.8.8
 nserver 8.8.4.4
 nscache 65536
 timeouts 1 5 30 60 180 1800 15 60
 {auth_lines}
-proxy -p{http_port} -i{ip_address} -e{ip_address}
-socks -p{socks_port} -i{ip_address} -e{ip_address}
+proxy -p{http_port} -i0.0.0.0 -e{egress_ip}
+socks -p{socks_port} -i0.0.0.0 -e{egress_ip}
 """
 
-def write_3proxy_config_file(interface_name, ip_address):
+def write_3proxy_config_file(interface_name, egress_ip):
     try:
         THREPROXY_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         all_configs = read_state_file(PROXY_CONFIGS_FILE)
         interface_config = all_configs.get(interface_name)
         if not interface_config:
             raise Exception(f"No configuration found for {interface_name}")
-        config_content = generate_3proxy_config_content(interface_config, ip_address)
+        config_content = generate_3proxy_config_content(interface_config, egress_ip)
         if not config_content:
             log_message("WARN", f"Could not generate config content for {interface_name}, likely missing IP. Skipping write.")
             return None
@@ -308,11 +310,10 @@ def get_all_modem_statuses():
             if modem['proxyConfig'].get('customName'):
                  modem['name'] = modem['proxyConfig']['customName']
             
-            current_bind_ip = modem['proxyConfig'].get('bindIp')
-            if modem['ipAddress'] and current_bind_ip != modem['ipAddress']:
-                 proxy_configs.setdefault(interface_name, {})['bindIp'] = modem['ipAddress']
-                 configs_changed = True
-            
+            # The "bindIp" is now always 0.0.0.0, the important part is the egress IP for the config file.
+            proxy_configs.setdefault(interface_name, {})['bindIp'] = "0.0.0.0"
+
+            # Use the modem's local IP as the egress IP for the 3proxy config
             if modem['status'] == 'connected' and modem['ipAddress']:
                 write_3proxy_config_file(interface_name, modem['ipAddress'])
 

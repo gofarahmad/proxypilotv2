@@ -6,9 +6,9 @@ import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { getAllModemStatuses, ModemStatus } from '@/services/network-service';
+import { getAllModemStatuses } from '@/services/network-service';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ClipboardCopy, KeyRound, ListChecks, Info, Copy, NetworkIcon, Binary, User, Lock } from 'lucide-react';
+import { ClipboardCopy, KeyRound, ListChecks, Info, Copy, NetworkIcon, User, Lock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
   Table,
@@ -29,9 +29,9 @@ interface FormattedProxy {
   id: string;
   name: string;
   interfaceName: string;
-  httpProxyString: string;
-  socksProxyString: string;
-  ipAddress: string;
+  // We no longer build the full string here, as the IP is dynamic.
+  // We provide the components to be copied.
+  ipAddress: string; // Will be 0.0.0.0
   httpPort: number;
   socksPort: number;
   username?: string;
@@ -52,26 +52,16 @@ export default function ProxyListPage() {
         .filter(m => m.status === 'connected' && m.proxyStatus === 'running' && m.proxyConfig?.bindIp && m.proxyConfig?.httpPort && m.proxyConfig?.socksPort)
         .map(modem => {
           const config = modem.proxyConfig!;
-          const ip = config.bindIp!;
+          const ip = config.bindIp!; // This will be 0.0.0.0
           const httpPort = config.httpPort!;
           const socksPort = config.socksPort!;
           const username = config.username;
           const password = config.password;
-          
-          let httpProxyString = `${ip}:${httpPort}`;
-          let socksProxyString = `${ip}:${socksPort}`;
-          if (username && password) {
-            const credentials = `:${username}:${password}`;
-            httpProxyString += credentials;
-            socksProxyString += credentials;
-          }
 
           return {
             id: modem.id,
             name: config.customName || modem.name,
             interfaceName: modem.interfaceName,
-            httpProxyString: httpProxyString,
-            socksProxyString: socksProxyString,
             ipAddress: ip,
             httpPort: httpPort,
             socksPort: socksPort,
@@ -111,6 +101,17 @@ export default function ProxyListPage() {
         console.error('Failed to copy: ', err);
       });
   };
+  
+  const buildProxyString = (proxy: FormattedProxy, type: 'http' | 'socks') => {
+      // Note: The user needs to replace 'YOUR_SERVER_IP' with their actual server LAN IP.
+      const port = type === 'http' ? proxy.httpPort : proxy.socksPort;
+      let str = `YOUR_SERVER_IP:${port}`;
+      if (proxy.username && proxy.password) {
+          str += `:${proxy.username}:${proxy.password}`;
+      }
+      return str;
+  }
+
 
   const renderContent = () => {
     if (isLoading) {
@@ -157,7 +158,7 @@ export default function ProxyListPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Proxy Name</TableHead>
-                <TableHead>IP Address</TableHead>
+                <TableHead>Listening IP</TableHead>
                 <TableHead>HTTP Port</TableHead>
                 <TableHead>SOCKS5 Port</TableHead>
                 <TableHead>Username</TableHead>
@@ -172,7 +173,10 @@ export default function ProxyListPage() {
                     <div className="font-medium">{proxy.name}</div>
                     <div className="text-xs text-muted-foreground">{proxy.interfaceName}</div>
                   </TableCell>
-                  <TableCell className="font-mono text-sm">{proxy.ipAddress}</TableCell>
+                  <TableCell>
+                     <Badge variant="outline">{proxy.ipAddress}</Badge>
+                     <p className="text-xs text-muted-foreground mt-1">Accessible on your LAN IP</p>
+                  </TableCell>
                    <TableCell className="font-mono text-sm">{proxy.httpPort}</TableCell>
                    <TableCell className="font-mono text-sm">{proxy.socksPort}</TableCell>
                    <TableCell className="font-mono text-sm">{proxy.username || 'N/A'}</TableCell>
@@ -186,19 +190,22 @@ export default function ProxyListPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleCopyToClipboard(proxy.httpProxyString, "HTTP Proxy String", proxy.name)}>
+                        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(buildProxyString(proxy, 'http'), "HTTP Proxy String", proxy.name)}>
                           <Copy className="mr-2 h-4 w-4" /> Copy HTTP String
                         </DropdownMenuItem>
-                         <DropdownMenuItem onClick={() => handleCopyToClipboard(proxy.socksProxyString, "SOCKS5 Proxy String", proxy.name)}>
+                         <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(buildProxyString(proxy, 'socks'), "SOCKS5 Proxy String", proxy.name)}>
                           <Copy className="mr-2 h-4 w-4" /> Copy SOCKS5 String
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleCopyToClipboard(proxy.ipAddress, "IP Address", proxy.name)}>
-                          <NetworkIcon className="mr-2 h-4 w-4" /> Copy IP
+                        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.httpPort, "HTTP Port", proxy.name)}>
+                          <NetworkIcon className="mr-2 h-4 w-4" /> Copy HTTP Port
                         </DropdownMenuItem>
-                         {proxy.username && <DropdownMenuItem onClick={() => handleCopyToClipboard(proxy.username, "Username", proxy.name)}>
+                        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.socksPort, "SOCKS5 Port", proxy.name)}>
+                          <NetworkIcon className="mr-2 h-4 w-4" /> Copy SOCKS5 Port
+                        </DropdownMenuItem>
+                         {proxy.username && <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.username, "Username", proxy.name)}>
                            <User className="mr-2 h-4 w-4" /> Copy Username
                         </DropdownMenuItem>}
-                        {proxy.password && <DropdownMenuItem onClick={() => handleCopyToClipboard(proxy.password, "Password", proxy.name)}>
+                        {proxy.password && <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={() => handleCopyToClipboard(proxy.password, "Password", proxy.name)}>
                            <Lock className="mr-2 h-4 w-4" /> Copy Password
                         </DropdownMenuItem>}
                       </DropdownMenuContent>
@@ -230,22 +237,25 @@ export default function ProxyListPage() {
                 <CardDescription>Interface: {proxy.interfaceName}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
+                <div className="text-sm">
+                  Use your server's LAN IP to connect.
+                </div>
                 <div className="flex items-center justify-between p-2 bg-muted rounded-md text-sm font-mono">
-                  <code className="truncate" title={proxy.httpProxyString}>{proxy.httpProxyString}</code>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(proxy.httpProxyString, "HTTP String", proxy.name)}>
+                  <span>HTTP Port: {proxy.httpPort}</span>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(proxy.httpPort, "HTTP Port", proxy.name)}>
                     <ClipboardCopy className="h-4 w-4" />
-                    <span className="sr-only">Copy HTTP string</span>
+                    <span className="sr-only">Copy HTTP Port</span>
                   </Button>
                 </div>
                 <div className="flex items-center justify-between p-2 bg-muted rounded-md text-sm font-mono">
-                  <code className="truncate" title={proxy.socksProxyString}>{proxy.socksProxyString}</code>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(proxy.socksProxyString, "SOCKS5 String", proxy.name)}>
+                  <span>SOCKS5 Port: {proxy.socksPort}</span>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => handleCopyToClipboard(proxy.socksPort, "SOCKS5 Port", proxy.name)}>
                     <ClipboardCopy className="h-4 w-4" />
-                    <span className="sr-only">Copy SOCKS5 string</span>
+                    <span className="sr-only">Copy SOCKS5 Port</span>
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Format: IP:Port{proxy.username && ':User:Pass'}
+                  Format: YOUR_SERVER_IP:Port{proxy.username && ':User:Pass'}
                 </p>
               </CardContent>
             </Card>
@@ -259,7 +269,7 @@ export default function ProxyListPage() {
     <>
       <PageHeader
         title="Active Proxy List"
-        description="List of all currently active proxies, both authenticated and open."
+        description="List of all currently active proxies. Use your server's LAN IP to connect from other devices."
         actions={
           <Button onClick={fetchAndFormatProxies} disabled={isLoading} variant="outline">
             <ListChecks className="mr-2 h-4 w-4" />
@@ -272,3 +282,5 @@ export default function ProxyListPage() {
     </>
   );
 }
+
+    
