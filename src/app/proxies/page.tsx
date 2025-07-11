@@ -117,12 +117,6 @@ export default function ProxyControlPage() {
       
       const proxiesWithDetails = await Promise.all(
         modemData.map(async (m) => {
-          const tunnelIdHttp = `tunnel_http_${m.interfaceName}`;
-          const tunnelIdSocks = `tunnel_socks_${m.interfaceName}`;
-          const tunnelHttp = await getTunnelStatus(tunnelIdHttp);
-          const tunnelSocks = await getTunnelStatus(tunnelIdSocks);
-          const tunnel = tunnelHttp || tunnelSocks;
-
           const existingProxy = proxies.find(p => p.interfaceName === m.interfaceName);
 
           return { 
@@ -130,7 +124,7 @@ export default function ProxyControlPage() {
             proxyLoading: existingProxy?.proxyLoading || false, 
             tunnelLoading: existingProxy?.tunnelLoading || false,
             config: m.proxyConfig || null,
-            tunnel: tunnel 
+            tunnel: null // Tunnel data will be loaded from settings page now
           };
         })
       );
@@ -215,39 +209,11 @@ export default function ProxyControlPage() {
     }
   };
 
-  const handleTunnelAction = async (proxy: ProxyInstance, action: 'start' | 'stop') => {
-      if (!proxy.config?.httpPort) {
-          toast({ title: "Cannot Start Tunnel", description: "Proxy HTTP port is not configured.", variant: "destructive" });
-          return;
-      }
-      setProxies(prev => prev.map(p => p.interfaceName === proxy.interfaceName ? { ...p, tunnelLoading: true } : p));
-      
-      const tunnelId = `tunnel_http_${proxy.interfaceName}`;
-      try {
-          if (action === 'start') {
-              await startTunnel(tunnelId, proxy.config.httpPort, proxy.name, 'Ngrok');
-          } else {
-              await stopTunnel(tunnelId);
-          }
-          toast({
-              title: `Tunnel ${action} Succeeded`,
-              description: `Tunnel for proxy on ${proxy.interfaceName} has been ${action}ed.`
-          });
-          await new Promise(resolve => setTimeout(resolve, 2500)); // Wait for tunnel state to update
-          await fetchProxiesData(false);
-          setProxies(prev => prev.map(p => p.interfaceName === proxy.interfaceName ? { ...p, tunnelLoading: false } : p));
-      } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
-          toast({ title: `Error ${action}ing tunnel`, description: errorMessage, variant: "destructive" });
-          setProxies(prev => prev.map(p => p.interfaceName === proxy.interfaceName ? { ...p, tunnelLoading: false } : p));
-      }
-  };
-
   const renderContent = () => {
     if (isLoading) {
       return (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map(i => <Skeleton key={i} className="h-[380px] w-full rounded-lg" />)}
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-[320px] w-full rounded-lg" />)}
         </div>
       );
     }
@@ -329,23 +295,6 @@ export default function ProxyControlPage() {
                             <CredentialsDialog proxy={proxy} onCredentialsUpdate={() => fetchProxiesData(true)} />
                         </div>
                     </div>
-                    
-                    <div className="flex items-center justify-between mt-2">
-                    <span className="text-sm font-medium">Tunnel Status:</span>
-                    <Badge variant={proxy.tunnel?.status === 'active' ? 'default' : 'secondary'}
-                        className={`
-                        ${proxy.tunnel?.status === 'active' ? 'bg-purple-500/20 text-purple-700 border-purple-500' : 'bg-gray-500/20 text-gray-700 border-gray-500'}
-                        `}
-                    >
-                        <Waypoints className="inline mr-1 h-4 w-4" />
-                        {proxy.tunnel?.status || 'inactive'}
-                    </Badge>
-                    </div>
-                    {proxy.tunnel?.url && (
-                    <p className="text-xs text-muted-foreground truncate pt-1" title={proxy.tunnel.url}>
-                        URL: <span className="font-mono text-foreground">{proxy.tunnel.url}</span>
-                    </p>
-                    )}
                 </div>
                 
                 <div className="space-y-2 pt-4">
@@ -375,23 +324,6 @@ export default function ProxyControlPage() {
                     {proxy.proxyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Restart
                     </Button>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 pt-2">
-                    <Button 
-                        onClick={() => handleTunnelAction(proxy, 'start')} 
-                        disabled={proxy.tunnelLoading || proxy.tunnel?.status === 'active' || proxy.proxyStatus !== 'running'}
-                        size="sm" className="bg-purple-600 hover:bg-purple-700 text-white"
-                        title={proxy.proxyStatus !== 'running' ? 'Proxy must be running to start tunnel' : ''}
-                    >
-                        {proxy.tunnelLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Start Tunnel
-                    </Button>
-                    <Button 
-                        onClick={() => handleTunnelAction(proxy, 'stop')} 
-                        disabled={proxy.tunnelLoading || proxy.tunnel?.status !== 'active'}
-                        size="sm" variant="destructive"
-                    >
-                    {proxy.tunnelLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <StopCircle className="h-4 w-4" />} Stop Tunnel
-                    </Button>
-                    </div>
                 </div>
                 </CardContent>
             </Card>
@@ -405,7 +337,7 @@ export default function ProxyControlPage() {
     <>
       <PageHeader
         title="Proxy Control"
-        description="Start, stop, manage credentials, and create internet tunnels for your proxy servers."
+        description="Start, stop, and manage credentials for your proxy servers."
         actions={
           <Button onClick={() => fetchProxiesData(true)} disabled={isLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
@@ -417,3 +349,5 @@ export default function ProxyControlPage() {
     </>
   );
 }
+
+    
