@@ -183,21 +183,24 @@ def run_and_parse_json(command_list: List[str], timeout: Optional[int] = None) -
 
 # --- Port and Config Management ---
 def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[Dict, bool]:
-    """Gets an existing proxy config or generates a new one with non-overlapping port ranges."""
+    """
+    Gets an existing proxy config or generates a new one with non-overlapping port ranges.
+    This is the corrected logic.
+    """
     if interface_name in all_configs and all(k in all_configs[interface_name] for k in ['httpPort', 'socksPort']):
         return all_configs[interface_name], False
 
     used_http_ports = {c.get('httpPort') for c in all_configs.values() if c.get('httpPort')}
     used_socks_ports = {c.get('socksPort') for c in all_configs.values() if c.get('socksPort')}
     
-    # Find available HTTP port
+    # Find available HTTP port independently
     http_port = CONFIG['HTTP_PORT_RANGE_START']
     while http_port in used_http_ports:
         http_port += 1
         if http_port > CONFIG['HTTP_PORT_RANGE_END']:
             raise Exception("No available HTTP ports in the specified range.")
 
-    # Find available SOCKS port
+    # Find available SOCKS port independently
     socks_port = CONFIG['SOCKS_PORT_RANGE_START']
     while socks_port in used_socks_ports:
         socks_port += 1
