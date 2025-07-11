@@ -19,8 +19,8 @@ TUNNEL_PIDS_FILE = STATE_DIR / "tunnel_pids.json"
 LOG_FILE = STATE_DIR / "activity.log"
 LOG_MAX_ENTRIES = 200
 THREPROXY_CONFIG_DIR = Path("/etc/3proxy/conf")
-PORT_RANGE_START = 8001
-PORT_RANGE_END = 9001
+PORT_RANGE_START = 7001
+PORT_RANGE_END = 8001
 
 # --- Logging Helper ---
 def log_message(level, message):
@@ -742,5 +742,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
