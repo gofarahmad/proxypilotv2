@@ -96,14 +96,15 @@ Aplikasi ini perlu menulis file konfigurasi untuk 3proxy, dan layanan `systemd` 
 # Buat direktori untuk file konfigurasi 3proxy dinamis kita
 sudo mkdir -p /etc/3proxy/conf
 
-# Ganti 'your_user' dengan username Anda saat ini (misalnya, 'ubuntu' atau 'root').
-# Jalankan `whoami` untuk melihat username Anda.
-# Ini memberikan kepemilikan kepada pengguna yang akan menjalankan aplikasi.
+# Perintah ini secara otomatis mengambil nama pengguna Anda saat ini (`$(whoami)`)
+# dan memberikannya kepemilikan atas direktori konfigurasi 3proxy.
+# Ini penting agar aplikasi web (yang berjalan sebagai pengguna Anda) dapat
+# membuat dan mengelola file konfigurasi proxy.
 sudo chown -R $(whoami):$(whoami) /etc/3proxy
 
 # **PERINTAH PENTING:** Atur izin agar semua orang bisa membaca/masuk ke direktori,
 # tetapi hanya pemilik yang bisa menulis. Ini memungkinkan layanan systemd (root)
-# untuk membaca file konfigurasi yang dibuat oleh aplikasi.
+# untuk membaca file konfigurasi yang dibuat oleh aplikasi Anda.
 sudo chmod -R 755 /etc/3proxy
 ```
 
