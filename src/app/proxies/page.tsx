@@ -182,13 +182,14 @@ export default function ProxyControlPage() {
                   tunnel: null, // This will be repopulated on next full fetch
               })));
               activePolls.delete(interfaceName);
+              fetchProxiesData(false); // Do a final full fetch
           } else {
               setTimeout(poll, 2000);
           }
       };
 
       poll();
-  }, [activePolls]);
+  }, [activePolls, fetchProxiesData]);
 
   const handleProxyAction = async (interfaceName: string, action: 'start' | 'stop' | 'restart') => {
     setProxies(prev => prev.map(p => p.interfaceName === interfaceName ? { ...p, proxyLoading: true } : p));
@@ -416,5 +417,3 @@ export default function ProxyControlPage() {
     </>
   );
 }
-
-    

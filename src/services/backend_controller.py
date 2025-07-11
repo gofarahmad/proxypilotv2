@@ -22,8 +22,10 @@ CONFIG = {
     'LOG_FILE': "activity.log",
     'LOG_MAX_ENTRIES': 200,
     'THREPROXY_CONFIG_DIR': Path("/etc/3proxy/conf"),
-    'PORT_RANGE_START': 7001,
-    'PORT_RANGE_END': 8000, 
+    'HTTP_PORT_RANGE_START': 7001,
+    'HTTP_PORT_RANGE_END': 8000,
+    'SOCKS_PORT_RANGE_START': 8001,
+    'SOCKS_PORT_RANGE_END': 9000,
     'DEFAULT_TIMEOUT': 15,
 }
 
@@ -173,7 +175,7 @@ def run_and_parse_json(command_list: List[str], timeout: Optional[int] = None) -
 
 # --- Port and Config Management ---
 def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[Dict, bool]:
-    """Gets an existing proxy config or generates a new one."""
+    """Gets an existing proxy config or generates a new one with non-overlapping port ranges."""
     if interface_name in all_configs and all(k in all_configs[interface_name] for k in ['httpPort', 'socksPort']):
         return all_configs[interface_name], False
 
@@ -181,15 +183,24 @@ def get_or_create_proxy_config(interface_name: str, all_configs: Dict) -> Tuple[
         port for config in all_configs.values() for key, port in config.items() if key in ['httpPort', 'socksPort']
     }
     
-    http_port = CONFIG['PORT_RANGE_START']
-    while http_port in used_ports or (http_port + 1000) in used_ports:
+    # Find available HTTP port
+    http_port = CONFIG['HTTP_PORT_RANGE_START']
+    while http_port in used_ports:
         http_port += 1
-        if http_port > CONFIG['PORT_RANGE_END']:
-            raise Exception("No available ports in the specified range.")
+        if http_port > CONFIG['HTTP_PORT_RANGE_END']:
+            raise Exception("No available HTTP ports in the specified range.")
+    used_ports.add(http_port)
+
+    # Find available SOCKS port
+    socks_port = CONFIG['SOCKS_PORT_RANGE_START']
+    while socks_port in used_ports:
+        socks_port += 1
+        if socks_port > CONFIG['SOCKS_PORT_RANGE_END']:
+            raise Exception("No available SOCKS ports in the specified range.")
     
     new_config = {
         "httpPort": http_port,
-        "socksPort": http_port + 1000, 
+        "socksPort": socks_port, 
         "username": f"user_{secrets.token_hex(2)}",
         "password": secrets.token_hex(8),
         "customName": None
@@ -227,14 +238,12 @@ def generate_3proxy_config_content(config: Dict, egress_ip: str) -> Optional[str
             f"allow {username}"
         ])
     else:
-        # If no auth, allow anyone but it's bound to egress IP so it's not a public relay
         lines.append("auth none")
 
     proxy_flags = "-n"
     if not is_authenticated:
         proxy_flags += " -a"
 
-    # For socks, we don't need -n, but we do need -a for anonymous
     socks_flags = ""
     if not is_authenticated:
         socks_flags += " -a"
@@ -750,4 +759,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
