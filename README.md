@@ -1,4 +1,4 @@
-
+ 
 # Proxy Pilot - Modem Management System
 
 Ini adalah aplikasi Next.js yang dirancang untuk mengelola, memonitor, dan memanfaatkan beberapa modem USB sebagai proxy yang dapat dirotasi. Aplikasi ini menyediakan antarmuka web untuk mengontrol modem, proxy, rotasi IP, dan banyak lagi.

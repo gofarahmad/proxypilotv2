@@ -1,4 +1,3 @@
-
 # src/services/backend_controller.py
 import sys
 import json
@@ -772,5 +771,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
